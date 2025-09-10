@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: video-processing-service
+    env: node
+    repo: https://github.com/Agbscholar/video-processor.git
+    buildCommand: |
+      apt-get update && apt-get install -y ffmpeg
+      npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SUPABASE_URL
+        sync: false  # Set this in Render dashboard
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false  # Set this in Render dashboard
+      - key: PROCESSING_SERVICE_TOKEN
+        generateValue: true  # Auto-generate secure token
+      - key: N8N_CALLBACK_URL
+        value: https://your-n8n-instance.onrender.com/webhook/processing-complete
+      - key: MAX_FILE_SIZE
+        value: 500MB
+      - key: MAX_PROCESSING_TIME
+        value: 600000  # 10 minutes in milliseconds
+    disk:
+      name: video-processing-disk
+      mountPath: /tmp
+      sizeGB: 10
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+      targetMemoryPercent: 80
+      targetCPUPercent: 70
+    healthCheckPath: /health
