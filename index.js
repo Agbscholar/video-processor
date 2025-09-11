@@ -10,9 +10,13 @@ const fs = require('fs').promises;
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
+// Import existing processors
 const YouTubeProcessor = require('./processors/youtube-processor');
 const TikTokProcessor = require('./processors/tiktok-processor');
 const BaseProcessor = require('./processors/base-processor');
+
+// Import new Supabase processor
+const SupabaseVideoProcessor = require('./processors/supabaseVideoProcessor');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -64,10 +68,19 @@ const processors = {
   'Other': new BaseProcessor()
 };
 
+// Initialize Supabase processor for free plan optimization
+const supabaseProcessor = new SupabaseVideoProcessor();
+
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
+  
+  const validTokens = [
+    process.env.PROCESSING_SERVICE_TOKEN,
+    process.env.N8N_WEBHOOK_SECRET,
+    process.env.VIDEO_PROCESSOR_API_KEY
+  ].filter(Boolean);
   
   if (!token) {
     return res.status(401).json({ 
@@ -76,7 +89,7 @@ const authenticateToken = (req, res, next) => {
     });
   }
   
-  if (token !== process.env.PROCESSING_SERVICE_TOKEN) {
+  if (!validTokens.includes(token)) {
     return res.status(403).json({ 
       error: 'Invalid token',
       processing_id: req.body?.processing_id 
@@ -103,71 +116,119 @@ async function initializeTempDirs() {
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    version: process.env.npm_package_version || '1.0.0'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Get Supabase storage stats if available
+    let storageStats = {};
+    try {
+      storageStats = await supabaseProcessor.storage.getStorageStats();
+    } catch (err) {
+      storageStats = { error: 'Could not fetch storage stats' };
+    }
+    
+    res.status(200).json({
+      status: 'healthy',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      version: process.env.npm_package_version || '1.0.0',
+      endpoints: ['/process', '/process-video', '/upload-and-process', '/cleanup'],
+      storage: {
+        supabase: storageStats,
+        plan: 'free-tier-optimized'
+      }
+    });
+  } catch (error) {
+    res.status(200).json({
+      status: 'healthy',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      version: process.env.npm_package_version || '1.0.0',
+      storage: {
+        error: 'Could not fetch storage stats'
+      }
+    });
+  }
 });
 
-// Main processing endpoint
-app.post('/process-video', authenticateToken, async (req, res) => {
+// FIXED: Add the missing /process endpoint for n8n workflow compatibility
+app.post('/process', authenticateToken, async (req, res) => {
   const startTime = Date.now();
   let processingId = req.body.processing_id || uuidv4();
   
-  console.log(`[${processingId}] Starting video processing request`);
+  console.log(`[${processingId}] Starting legacy video processing request`);
   
   try {
     const {
-      video_url,
-      video_info,
-      subscription_type = 'free',
-      user_limits = { max_shorts: 3 },
-      supabase_config,
-      callback_url,
+      processing_id,
       telegram_id,
       chat_id,
-      platform
+      video_url,
+      video_info,
+      platform,
+      subscription_type = 'free',
+      user_limits = { max_shorts: 3 },
+      supabase,
+      storage,
+      callback_url,
+      business_bot_url
     } = req.body;
 
     // Input validation
-    if (!video_url || !callback_url) {
+    if (!video_url) {
       return res.status(400).json({
-        error: 'Missing required fields: video_url, callback_url',
+        error: 'Missing required field: video_url',
         processing_id: processingId
       });
     }
 
-    if (!supabase_config || !supabase_config.url || !supabase_config.service_key) {
+    if (!telegram_id || !chat_id) {
       return res.status(400).json({
-        error: 'Invalid supabase configuration',
+        error: 'Missing telegram identifiers: telegram_id, chat_id',
         processing_id: processingId
       });
     }
 
-    // Immediate response to N8N
+    // FIXED: Use business_bot_url as callback_url if callback_url is missing
+    const finalCallbackUrl = callback_url || 
+      (business_bot_url ? `${business_bot_url}/webhook/n8n-callback` : null);
+
+    if (!finalCallbackUrl) {
+      return res.status(400).json({
+        error: 'Missing callback mechanism: need either callback_url or business_bot_url',
+        processing_id: processingId
+      });
+    }
+
+    // Immediate response to n8n
     res.status(202).json({
       status: 'accepted',
       processing_id: processingId,
-      message: 'Video processing started',
-      estimated_completion_time: new Date(Date.now() + 300000).toISOString(), // 5 minutes
-      accepted_at: new Date().toISOString()
+      message: 'Video processing started (n8n compatibility mode)',
+      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
+      accepted_at: new Date().toISOString(),
+      callback_url: finalCallbackUrl
     });
 
-    // Start background processing
+    // Start background processing with n8n-specific data
     processVideoBackground({
       processing_id: processingId,
-      video_url,
-      video_info: video_info || { platform: platform || 'YouTube' },
-      subscription_type,
-      user_limits,
-      supabase_config,
-      callback_url,
       telegram_id,
       chat_id,
+      video_url,
+      video_info: video_info || { 
+        platform: platform || 'YouTube', 
+        title: 'Video Processing',
+        description: 'Processing video from n8n workflow'
+      },
+      platform: platform || detectPlatformFromUrl(video_url),
+      subscription_type,
+      user_limits,
+      supabase_config: supabase,
+      storage_config: storage,
+      callback_url: finalCallbackUrl,
+      business_bot_url,
       start_time: startTime
     }).catch(error => {
       console.error(`[${processingId}] Background processing failed:`, error);
@@ -184,58 +245,199 @@ app.post('/process-video', authenticateToken, async (req, res) => {
   }
 });
 
-// Background processing function
+// NEW: Supabase-optimized processing endpoint for free plan
+app.post('/process-video', authenticateToken, async (req, res) => {
+  const startTime = Date.now();
+  let processingId = req.body.processing_id || uuidv4();
+  
+  console.log(`[${processingId}] Starting Supabase-optimized video processing`);
+  
+  try {
+    const {
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type = 'free',
+      callback_url
+    } = req.body;
+
+    // Input validation
+    if (!video_url || !callback_url) {
+      return res.status(400).json({
+        error: 'Missing required fields: video_url, callback_url',
+        processing_id: processingId
+      });
+    }
+
+    if (!telegram_id || !chat_id) {
+      return res.status(400).json({
+        error: 'Missing telegram identifiers: telegram_id, chat_id',
+        processing_id: processingId
+      });
+    }
+
+    // Immediate response
+    res.status(202).json({
+      status: 'accepted',
+      processing_id: processingId,
+      message: 'Video processing started with Supabase storage',
+      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
+      accepted_at: new Date().toISOString(),
+      storage_method: 'supabase-optimized'
+    });
+
+    // Start Supabase-optimized background processing
+    processWithSupabaseStorage({
+      processing_id: processingId,
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type,
+      callback_url,
+      start_time: startTime
+    }).catch(error => {
+      console.error(`[${processingId}] Supabase processing failed:`, error);
+    });
+
+  } catch (error) {
+    console.error(`[${processingId}] Processing request failed:`, error);
+    
+    res.status(500).json({
+      error: error.message,
+      processing_id: processingId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Background processing for legacy /process endpoint
 async function processVideoBackground(data) {
-  const { processing_id } = data;
-  console.log(`[${processing_id}] Starting background processing`);
+  const { processing_id, telegram_id, chat_id } = data;
+  console.log(`[${processing_id}] Starting background processing for user ${telegram_id}`);
   
   try {
     // Determine processor based on platform
-    const platform = data.video_info.platform || detectPlatformFromUrl(data.video_url);
+    const platform = data.platform || detectPlatformFromUrl(data.video_url);
     const processor = processors[platform] || processors['Other'];
     
     console.log(`[${processing_id}] Using processor: ${platform}`);
     
+    // Enhanced processing data for processors
+    const processingData = {
+      ...data,
+      video_info: {
+        ...data.video_info,
+        platform: platform
+      }
+    };
+    
     // Set processing timeout
-    const processingTimeout = parseInt(process.env.MAX_PROCESSING_TIME) || 600000; // 10 minutes
-    const processingPromise = processor.process(data);
+    const processingTimeout = parseInt(process.env.MAX_PROCESSING_TIME) || 600000;
+    const processingPromise = processor.process(processingData);
     
     const result = await Promise.race([
       processingPromise,
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Processing timeout')), processingTimeout);
+        setTimeout(() => reject(new Error('Processing timeout exceeded')), processingTimeout);
       })
     ]);
     
     console.log(`[${processing_id}] Processing completed successfully`);
     
-    // Send success callback to N8N
+    // Enhanced success callback for n8n workflow
     await sendCallback(data.callback_url, {
-      ...result,
+      processing_id: data.processing_id,
+      telegram_id: data.telegram_id,
+      chat_id: data.chat_id,
       status: 'completed',
-      processing_time: Date.now() - data.start_time
+      shorts_results: result.shorts_results || result.shorts || [],
+      total_shorts: result.total_shorts || (result.shorts_results?.length || result.shorts?.length || 0),
+      processing_completed_at: new Date().toISOString(),
+      video_info: data.video_info,
+      platform: platform,
+      subscription_type: data.subscription_type,
+      usage_stats: {
+        processing_time: `${Math.floor((Date.now() - data.start_time) / 1000)} seconds`,
+        videos_processed: 1,
+        shorts_created: result.total_shorts || (result.shorts_results?.length || result.shorts?.length || 0),
+        quality: data.subscription_type === 'free' ? '720p' : '1080p'
+      }
     });
 
   } catch (error) {
     console.error(`[${processing_id}] Background processing error:`, error);
     
-    // Categorize error for better user experience
     const errorCategory = categorizeError(error);
     
-    // Send error callback to N8N
+    // Enhanced error callback for n8n workflow
     await sendCallback(data.callback_url, {
       processing_id: data.processing_id,
       telegram_id: data.telegram_id,
       chat_id: data.chat_id,
-      status: 'failed',
+      status: 'error',
       error: {
         message: error.message,
         category: errorCategory,
         timestamp: new Date().toISOString(),
-        processing_time: Date.now() - data.start_time
+        processing_time: `${Math.floor((Date.now() - data.start_time) / 1000)} seconds`
       },
       video_url: data.video_url,
-      platform: platform
+      video_info: data.video_info,
+      platform: data.platform || detectPlatformFromUrl(data.video_url)
+    });
+  }
+}
+
+// Supabase-optimized background processing
+async function processWithSupabaseStorage(data) {
+  const { processing_id, telegram_id, chat_id, video_url } = data;
+  console.log(`[${processing_id}] Starting Supabase-optimized processing for user ${telegram_id}`);
+  
+  try {
+    // Use Supabase processor for free-tier optimization
+    const result = await supabaseProcessor.processVideo(video_url, {
+      quality: data.subscription_type === 'free' ? 'medium' : 'high',
+      maxDuration: data.subscription_type === 'free' ? 300 : 600 // 5min free, 10min premium
+    });
+    
+    console.log(`[${processing_id}] Supabase processing completed successfully`);
+    
+    // Send success callback with Supabase URLs
+    await sendCallback(data.callback_url, {
+      processing_id: data.processing_id,
+      telegram_id: data.telegram_id,
+      chat_id: data.chat_id,
+      status: 'completed',
+      video_url: result.videoUrl,
+      thumbnail_url: result.thumbnailUrl,
+      file_size_mb: result.fileSize,
+      processing_completed_at: new Date().toISOString(),
+      storage_method: 'supabase',
+      usage_stats: {
+        processing_time: `${Math.floor((Date.now() - data.start_time) / 1000)} seconds`,
+        quality: data.subscription_type === 'free' ? '720p' : '1080p',
+        storage_used: 'supabase-free-tier'
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${processing_id}] Supabase processing error:`, error);
+    
+    const errorCategory = categorizeError(error);
+    
+    // Send error callback
+    await sendCallback(data.callback_url, {
+      processing_id: data.processing_id,
+      telegram_id: data.telegram_id,
+      chat_id: data.chat_id,
+      status: 'error',
+      error: {
+        message: error.message,
+        category: errorCategory,
+        timestamp: new Date().toISOString(),
+        storage_method: 'supabase'
+      },
+      video_url: data.video_url
     });
   }
 }
@@ -258,6 +460,8 @@ function categorizeError(error) {
     return 'storage_error';
   } else if (errorMessage.includes('ffmpeg') || errorMessage.includes('encoding')) {
     return 'encoding_error';
+  } else if (errorMessage.includes('too large') || errorMessage.includes('size')) {
+    return 'file_size_error';
   } else {
     return 'unknown_error';
   }
@@ -278,21 +482,22 @@ function detectPlatformFromUrl(url) {
   }
 }
 
-// Callback sender with retry logic
+// Enhanced callback sender
 async function sendCallback(callbackUrl, data, retries = 3) {
   const axios = require('axios');
   
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      console.log(`[${data.processing_id}] Sending callback attempt ${attempt}/${retries}`);
+      console.log(`[${data.processing_id}] Sending callback attempt ${attempt}/${retries} to: ${callbackUrl}`);
       
       const response = await axios.post(callbackUrl, data, {
         timeout: 30000,
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Video-Processing-Service/1.0.0'
+          'User-Agent': 'Video-Processing-Service/1.0.0',
+          'Authorization': `Bearer ${process.env.N8N_WEBHOOK_SECRET || ''}`
         },
-        validateStatus: (status) => status < 500 // Don't retry on 4xx errors
+        validateStatus: (status) => status < 500
       });
       
       console.log(`[${data.processing_id}] Callback sent successfully, status: ${response.status}`);
@@ -302,28 +507,26 @@ async function sendCallback(callbackUrl, data, retries = 3) {
       console.error(`[${data.processing_id}] Callback attempt ${attempt} failed:`, {
         message: error.message,
         status: error.response?.status,
-        statusText: error.response?.statusText
+        statusText: error.response?.statusText,
+        url: callbackUrl
       });
       
       if (attempt === retries || (error.response && error.response.status < 500)) {
-        console.error(`[${data.processing_id}] All callback attempts failed or received 4xx error`);
+        console.error(`[${data.processing_id}] All callback attempts failed`);
         break;
       }
       
-      // Exponential backoff
       const delay = Math.pow(2, attempt) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 }
 
-// Status endpoint for checking processing progress
+// Status endpoint
 app.get('/status/:processing_id', authenticateToken, async (req, res) => {
   const { processing_id } = req.params;
   
   try {
-    // In a real implementation, you'd check processing status from database or cache
-    // For now, return a basic response
     res.json({
       processing_id,
       status: 'processing',
@@ -338,7 +541,7 @@ app.get('/status/:processing_id', authenticateToken, async (req, res) => {
   }
 });
 
-// File upload endpoint (alternative to URL processing)
+// Upload and process endpoint
 app.post('/upload-and-process', authenticateToken, upload.single('video'), async (req, res) => {
   const processingId = uuidv4();
   
@@ -390,12 +593,13 @@ app.post('/upload-and-process', authenticateToken, upload.single('video'), async
   }
 });
 
-// Cleanup endpoint for removing old files
+// Cleanup endpoint with Supabase storage cleanup
 app.post('/cleanup', authenticateToken, async (req, res) => {
   try {
     const { older_than_hours = 24 } = req.body;
     const cutoffTime = Date.now() - (older_than_hours * 60 * 60 * 1000);
     
+    // Clean local temp files
     const dirs = ['/tmp/uploads', '/tmp/processing', '/tmp/output'];
     let deletedFiles = 0;
     
@@ -418,9 +622,24 @@ app.post('/cleanup', authenticateToken, async (req, res) => {
       }
     }
     
+    // Clean Supabase temp files if processor available
+    try {
+      await supabaseProcessor.performMaintenance();
+    } catch (supabaseError) {
+      console.warn('Supabase cleanup failed:', supabaseError.message);
+    }
+    
+    let storageStats = {};
+    try {
+      storageStats = await supabaseProcessor.storage.getStorageStats();
+    } catch (err) {
+      storageStats = { error: 'Could not fetch storage stats' };
+    }
+    
     res.json({
       status: 'cleanup_completed',
-      deleted_files: deletedFiles,
+      deleted_local_files: deletedFiles,
+      supabase_storage: storageStats,
       timestamp: new Date().toISOString()
     });
     
@@ -448,7 +667,15 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     path: req.originalUrl,
-    method: req.method
+    method: req.method,
+    available_endpoints: [
+      'GET /health',
+      'POST /process',
+      'POST /process-video', 
+      'POST /upload-and-process',
+      'POST /cleanup',
+      'GET /status/:processing_id'
+    ]
   });
 });
 
@@ -463,6 +690,12 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
+// Auto-cleanup every 30 minutes
+setInterval(() => {
+  supabaseProcessor.performMaintenance()
+    .catch(err => console.error('Auto-cleanup error:', err.message));
+}, 30 * 60 * 1000);
+
 // Initialize and start server
 async function startServer() {
   try {
@@ -471,9 +704,11 @@ async function startServer() {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Video Processing Service running on port ${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/health`);
-      console.log(`🎬 Process endpoint: http://localhost:${PORT}/process-video`);
+      console.log(`🎬 Legacy n8n endpoint: http://localhost:${PORT}/process`);
+      console.log(`🎬 Supabase endpoint: http://localhost:${PORT}/process-video`);
       console.log(`📁 Upload endpoint: http://localhost:${PORT}/upload-and-process`);
       console.log(`🧹 Cleanup endpoint: http://localhost:${PORT}/cleanup`);
+      console.log(`💾 Storage: Supabase-optimized for free tier`);
       console.log(`Environment: ${process.env.NODE_ENV}`);
     });
   } catch (error) {

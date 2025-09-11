@@ -3,7 +3,7 @@ services:
     name: video-processing-service
     env: node
     repo: https://github.com/Agbscholar/video-processor.git
-    buildCommand: npm install
+    buildCommand: npm install  # ← ONLY this line, remove the apt-get commands
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -11,17 +11,17 @@ services:
       - key: PORT
         value: 10000
       - key: SUPABASE_URL
-        sync: false  # Set this in Render dashboard
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false  # Set this in Render dashboard
+        sync: false
       - key: PROCESSING_SERVICE_TOKEN
-        generateValue: true  # Auto-generate secure token
+        generateValue: true
       - key: N8N_CALLBACK_URL
         value: https://n8n-on-render-wf30.onrender.com/webhook/processing-complete
       - key: MAX_FILE_SIZE
         value: 500MB
       - key: MAX_PROCESSING_TIME
-        value: 600000  # 10 minutes in milliseconds
+        value: 600000
     disk:
       name: video-processing-disk
       mountPath: /tmp
