@@ -301,6 +301,90 @@ class YouTubeProcessor {
     });
   }
 
+  async downloadWithYoutubeDl(videoUrl, processingId) {
+    const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
+    
+    try {
+      await youtubedl(videoUrl, {
+        output: outputTemplate,
+        format: 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+        mergeOutputFormat: 'mp4',
+        noWarnings: true,
+        noCallHome: true,
+        noCheckCertificate: true,
+        preferFreeFormats: true,
+        youtubeSkipDashManifest: true,
+        addHeader: [
+          'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        ]
+      });
+      
+      // Find the downloaded file
+      const files = await fs.readdir(this.tempDir);
+      const outputFile = files.find(file => file.startsWith(`${processingId}_original`));
+      
+      if (!outputFile) {
+        throw new Error('Downloaded file not found');
+      }
+      
+      return path.join(this.tempDir, outputFile);
+      
+    } catch (error) {
+      throw new Error(`youtube-dl-exec download failed: ${error.message}`);
+    }
+  }
+
+  async downloadWithYtdlCore(videoUrl, processingId) {
+    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+    
+    return new Promise((resolve, reject) => {
+      const timeoutMs = 300000;
+      let timeoutHandle;
+      
+      try {
+        const stream = ytdl(videoUrl, {
+          quality: 'highest',
+          filter: format => {
+            return format.container === 'mp4' && 
+                   format.hasVideo && 
+                   format.hasAudio;
+          }
+        });
+        
+        const writeStream = require('fs').createWriteStream(outputPath);
+        
+        timeoutHandle = setTimeout(() => {
+          stream.destroy();
+          writeStream.destroy();
+          reject(new Error('Download timeout - video might be too large'));
+        }, timeoutMs);
+        
+        stream.on('error', (error) => {
+          clearTimeout(timeoutHandle);
+          writeStream.destroy();
+          reject(error);
+        });
+        
+        writeStream.on('error', (error) => {
+          clearTimeout(timeoutHandle);
+          stream.destroy();
+          reject(error);
+        });
+        
+        writeStream.on('finish', () => {
+          clearTimeout(timeoutHandle);
+          resolve(outputPath);
+        });
+        
+        stream.pipe(writeStream);
+        
+      } catch (error) {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        reject(error);
+      }
+    });
+  }
+
   async getVideoMetadata(videoPath) {
     return new Promise((resolve, reject) => {
       ffmpeg.ffprobe(videoPath, (err, metadata) => {
@@ -706,57 +790,3 @@ class YouTubeProcessor {
 }
 
 module.exports = YouTubeProcessor;
-
-  async downloadWithYoutubeDl(videoUrl, processingId) {
-    const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
-    
-    try {
-      await youtubedl(videoUrl, {
-        output: outputTemplate,
-        format: 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
-        mergeOutputFormat: 'mp4',
-        noWarnings: true,
-        noCallHome: true,
-        noCheckCertificate: true,
-        preferFreeFormats: true,
-        youtubeSkipDashManifest: true,
-        addHeader: [
-          'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ]
-      });
-      
-      // Find the downloaded file
-      const files = await fs.readdir(this.tempDir);
-      const outputFile = files.find(file => file.startsWith(`${processingId}_original`));
-      
-      if (!outputFile) {
-        throw new Error('Downloaded file not found');
-      }
-      
-      return path.join(this.tempDir, outputFile);
-      
-    } catch (error) {
-      throw new Error(`youtube-dl-exec download failed: ${error.message}`);
-    }
-  }
-
-  async downloadWithYtdlCore(videoUrl, processingId) {
-    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
-    
-    return new Promise((resolve, reject) => {
-      const timeoutMs = 300000;
-      let timeoutHandle;
-      
-      try {
-        const stream = ytdl(videoUrl, {
-          quality: 'highest',
-          filter: format => {
-            return format.container === 'mp4' && 
-                   format.hasVideo && 
-                   format.hasAudio;
-          }
-        });
-        
-        const writeStream = require('fs').createWriteStream(outputPath);
-        
-        timeoutHandle = setTimeout(()
