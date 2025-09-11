@@ -1,4 +1,7 @@
+// processors/youtube-processor.js
 const ytdl = require('ytdl-core');
+const ytdlDistube = require('@distube/ytdl-core');
+const youtubedl = require('youtube-dl-exec');
 const ffmpeg = require('fluent-ffmpeg');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
@@ -39,13 +42,13 @@ class YouTubeProcessor {
         throw new Error('Invalid YouTube URL format');
       }
       
-      // 2. Get video info and validate availability
+      // 2. Get video info and validate availability with fallback
       console.log(`[${processing_id}] Fetching video information`);
-      const videoDetails = await this.getVideoInfo(video_url, processing_id);
+      const videoDetails = await this.getVideoInfoWithFallback(video_url, processing_id);
       
-      // 3. Download video with retry logic
-      console.log(`[${processing_id}] Downloading video`);
-      originalVideoPath = await this.downloadVideoWithRetry(video_url, processing_id);
+      // 3. Download video with multiple fallback methods
+      console.log(`[${processing_id}] Downloading video with fallback methods`);
+      originalVideoPath = await this.downloadVideoWithAllFallbacks(video_url, processing_id);
       
       // 4. Get video metadata
       const metadata = await this.getVideoMetadata(originalVideoPath);
@@ -129,96 +132,149 @@ class YouTubeProcessor {
     return null;
   }
 
-  async getVideoInfo(videoUrl, processingId) {
+  async getVideoInfoWithFallback(videoUrl, processingId) {
+    const methods = [
+      () => this.getVideoInfoDistube(videoUrl),
+      () => this.getVideoInfoYtdlCore(videoUrl),
+      () => this.getVideoInfoYoutubeDl(videoUrl)
+    ];
+
+    let lastError;
+    
+    for (const [index, method] of methods.entries()) {
+      try {
+        console.log(`[${processingId}] Trying video info method ${index + 1}`);
+        return await method();
+      } catch (error) {
+        lastError = error;
+        console.warn(`[${processingId}] Video info method ${index + 1} failed: ${error.message}`);
+      }
+    }
+    
+    throw new Error(`All video info methods failed: ${lastError.message}`);
+  }
+
+  async getVideoInfoDistube(videoUrl) {
     try {
-      const info = await ytdl.getInfo(videoUrl);
-      const videoDetails = info.videoDetails;
-      
-      // Check if video is available
-      if (!videoDetails.isLiveContent && videoDetails.isPrivate) {
-        throw new Error('Video is private or unavailable');
-      }
-      
-      if (videoDetails.age_restricted) {
-        throw new Error('Video is age-restricted and cannot be processed');
-      }
-      
-      return {
-        title: videoDetails.title,
-        description: videoDetails.shortDescription?.substring(0, 500) || '',
-        author: videoDetails.author?.name || 'Unknown',
-        duration: parseInt(videoDetails.lengthSeconds) || 0,
-        view_count: parseInt(videoDetails.viewCount) || 0,
-        upload_date: videoDetails.publishDate || videoDetails.uploadDate,
-        video_id: videoDetails.videoId,
-        thumbnail: videoDetails.thumbnails?.[0]?.url,
-        is_live: videoDetails.isLiveContent,
-        category: videoDetails.category
-      };
+      const info = await ytdlDistube.getInfo(videoUrl);
+      return this.extractVideoDetails(info.videoDetails);
     } catch (error) {
-      console.error(`[${processingId}] Failed to get video info:`, error);
-      
-      if (error.message.includes('Video unavailable')) {
-        throw new Error('YouTube video is unavailable, private, or deleted');
-      } else if (error.message.includes('age-restricted')) {
-        throw new Error('Video is age-restricted and cannot be processed');
-      } else {
-        throw new Error(`Failed to fetch video information: ${error.message}`);
-      }
+      throw new Error(`Distube getInfo failed: ${error.message}`);
     }
   }
 
-  async downloadVideoWithRetry(videoUrl, processingId) {
+  async getVideoInfoYtdlCore(videoUrl) {
+    try {
+      const info = await ytdl.getInfo(videoUrl);
+      return this.extractVideoDetails(info.videoDetails);
+    } catch (error) {
+      throw new Error(`ytdl-core getInfo failed: ${error.message}`);
+    }
+  }
+
+  async getVideoInfoYoutubeDl(videoUrl) {
+    try {
+      const info = await youtubedl(videoUrl, {
+        dumpSingleJson: true,
+        noCheckCertificate: true,
+        noWarnings: true,
+        preferFreeFormats: true
+      });
+      
+      return {
+        title: info.title || 'Unknown Title',
+        description: (info.description || '').substring(0, 500),
+        author: info.uploader || 'Unknown',
+        duration: parseInt(info.duration) || 0,
+        view_count: parseInt(info.view_count) || 0,
+        upload_date: info.upload_date,
+        video_id: info.id,
+        thumbnail: info.thumbnail,
+        is_live: info.is_live || false,
+        category: info.categories?.[0] || 'Unknown'
+      };
+    } catch (error) {
+      throw new Error(`youtube-dl-exec getInfo failed: ${error.message}`);
+    }
+  }
+
+  extractVideoDetails(videoDetails) {
+    // Check availability
+    if (videoDetails.isPrivate) {
+      throw new Error('Video is private or unavailable');
+    }
+    
+    if (videoDetails.age_restricted) {
+      throw new Error('Video is age-restricted and cannot be processed');
+    }
+    
+    return {
+      title: videoDetails.title,
+      description: videoDetails.shortDescription?.substring(0, 500) || '',
+      author: videoDetails.author?.name || 'Unknown',
+      duration: parseInt(videoDetails.lengthSeconds) || 0,
+      view_count: parseInt(videoDetails.viewCount) || 0,
+      upload_date: videoDetails.publishDate || videoDetails.uploadDate,
+      video_id: videoDetails.videoId,
+      thumbnail: videoDetails.thumbnails?.[0]?.url,
+      is_live: videoDetails.isLiveContent,
+      category: videoDetails.category
+    };
+  }
+
+  async downloadVideoWithAllFallbacks(videoUrl, processingId) {
+    const methods = [
+      () => this.downloadWithDistube(videoUrl, processingId),
+      () => this.downloadWithYoutubeDl(videoUrl, processingId),
+      () => this.downloadWithYtdlCore(videoUrl, processingId)
+    ];
+
     let lastError;
     
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+    for (const [index, method] of methods.entries()) {
       try {
-        console.log(`[${processingId}] Download attempt ${attempt}/${this.maxRetries}`);
-        return await this.downloadVideo(videoUrl, processingId);
+        console.log(`[${processingId}] Trying download method ${index + 1}`);
+        return await method();
       } catch (error) {
         lastError = error;
-        console.error(`[${processingId}] Download attempt ${attempt} failed:`, error.message);
+        console.warn(`[${processingId}] Download method ${index + 1} failed: ${error.message}`);
         
-        if (attempt < this.maxRetries) {
-          const delay = this.retryDelay * attempt;
-          console.log(`[${processingId}] Retrying in ${delay}ms...`);
-          await this.sleep(delay);
+        // Wait before trying next method
+        if (index < methods.length - 1) {
+          await this.sleep(2000);
         }
       }
     }
     
-    throw new Error(`Failed to download after ${this.maxRetries} attempts: ${lastError.message}`);
+    throw new Error(`All download methods failed: ${lastError.message}`);
   }
 
-  async downloadVideo(videoUrl, processingId) {
+  async downloadWithDistube(videoUrl, processingId) {
     const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
     
     return new Promise((resolve, reject) => {
-      const timeoutMs = 300000; // 5 minutes timeout
+      const timeoutMs = 300000; // 5 minutes
       let timeoutHandle;
       
       try {
-        // Choose best quality available (but not too large)
-        const stream = ytdl(videoUrl, {
+        const stream = ytdlDistube(videoUrl, {
           quality: 'highest',
-          filter: format => {
-            return format.container === 'mp4' && 
-                   format.hasVideo && 
-                   format.hasAudio &&
-                   (!format.contentLength || parseInt(format.contentLength) < 500 * 1024 * 1024); // Max 500MB
+          filter: 'audioandvideo',
+          requestOptions: {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
           }
         });
         
         const writeStream = require('fs').createWriteStream(outputPath);
         
-        // Set timeout
         timeoutHandle = setTimeout(() => {
           stream.destroy();
           writeStream.destroy();
-          reject(new Error('Download timeout - video might be too large or connection is slow'));
+          reject(new Error('Download timeout - video might be too large'));
         }, timeoutMs);
         
-        // Handle stream events
         stream.on('error', (error) => {
           clearTimeout(timeoutHandle);
           writeStream.destroy();
@@ -233,17 +289,9 @@ class YouTubeProcessor {
         
         writeStream.on('finish', () => {
           clearTimeout(timeoutHandle);
-          console.log(`[${processingId}] Video download completed: ${outputPath}`);
           resolve(outputPath);
         });
         
-        // Track download progress
-        let downloadedBytes = 0;
-        stream.on('data', (chunk) => {
-          downloadedBytes += chunk.length;
-        });
-        
-        // Pipe the stream
         stream.pipe(writeStream);
         
       } catch (error) {
@@ -658,3 +706,57 @@ class YouTubeProcessor {
 }
 
 module.exports = YouTubeProcessor;
+
+  async downloadWithYoutubeDl(videoUrl, processingId) {
+    const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
+    
+    try {
+      await youtubedl(videoUrl, {
+        output: outputTemplate,
+        format: 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+        mergeOutputFormat: 'mp4',
+        noWarnings: true,
+        noCallHome: true,
+        noCheckCertificate: true,
+        preferFreeFormats: true,
+        youtubeSkipDashManifest: true,
+        addHeader: [
+          'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        ]
+      });
+      
+      // Find the downloaded file
+      const files = await fs.readdir(this.tempDir);
+      const outputFile = files.find(file => file.startsWith(`${processingId}_original`));
+      
+      if (!outputFile) {
+        throw new Error('Downloaded file not found');
+      }
+      
+      return path.join(this.tempDir, outputFile);
+      
+    } catch (error) {
+      throw new Error(`youtube-dl-exec download failed: ${error.message}`);
+    }
+  }
+
+  async downloadWithYtdlCore(videoUrl, processingId) {
+    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+    
+    return new Promise((resolve, reject) => {
+      const timeoutMs = 300000;
+      let timeoutHandle;
+      
+      try {
+        const stream = ytdl(videoUrl, {
+          quality: 'highest',
+          filter: format => {
+            return format.container === 'mp4' && 
+                   format.hasVideo && 
+                   format.hasAudio;
+          }
+        });
+        
+        const writeStream = require('fs').createWriteStream(outputPath);
+        
+        timeoutHandle = setTimeout(()
