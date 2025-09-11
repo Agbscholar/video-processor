@@ -1,4 +1,4 @@
-// processors/youtube-processor.js
+// processors/youtube-processor.js - Enhanced with better bot detection avoidance
 const ytdl = require('ytdl-core');
 const ytdlDistube = require('@distube/ytdl-core');
 const youtubedl = require('youtube-dl-exec');
@@ -15,6 +15,19 @@ class YouTubeProcessor {
     this.outputDir = '/tmp/output';
     this.maxRetries = 3;
     this.retryDelay = 2000;
+    
+    // Enhanced user agents to avoid bot detection
+    this.userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+    ];
+  }
+
+  getRandomUserAgent() {
+    return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
   }
 
   async process(data) {
@@ -35,12 +48,17 @@ class YouTubeProcessor {
     let originalVideoPath = null;
     
     try {
+      // Ensure directories exist
+      await this.ensureDirectories();
+      
       // 1. Validate and prepare video URL
       console.log(`[${processing_id}] Validating YouTube URL`);
       const videoId = this.extractVideoId(video_url);
       if (!videoId) {
         throw new Error('Invalid YouTube URL format');
       }
+      
+      console.log(`[${processing_id}] Extracted video ID: ${videoId}`);
       
       // 2. Get video info and validate availability with fallback
       console.log(`[${processing_id}] Fetching video information`);
@@ -50,14 +68,17 @@ class YouTubeProcessor {
       console.log(`[${processing_id}] Downloading video with fallback methods`);
       originalVideoPath = await this.downloadVideoWithAllFallbacks(video_url, processing_id);
       
-      // 4. Get video metadata
+      // 4. Validate downloaded file
+      await this.validateDownloadedFile(originalVideoPath, processing_id);
+      
+      // 5. Get video metadata
       const metadata = await this.getVideoMetadata(originalVideoPath);
       console.log(`[${processing_id}] Video duration: ${metadata.duration}s, resolution: ${metadata.width}x${metadata.height}`);
       
-      // 5. Validate video for processing
+      // 6. Validate video for processing
       this.validateVideoForProcessing(metadata, subscription_type);
       
-      // 6. Create shorts segments
+      // 7. Create shorts segments
       console.log(`[${processing_id}] Creating video shorts`);
       const shorts = await this.createShorts(originalVideoPath, {
         processing_id,
@@ -67,15 +88,15 @@ class YouTubeProcessor {
         video_info: { ...video_info, ...videoDetails }
       });
       
-      // 7. Generate thumbnails for each short
+      // 8. Generate thumbnails for each short
       console.log(`[${processing_id}] Generating thumbnails`);
       const shortsWithThumbnails = await this.generateThumbnails(shorts, processing_id);
       
-      // 8. Upload to Supabase Storage
+      // 9. Upload to Supabase Storage
       console.log(`[${processing_id}] Uploading to cloud storage`);
       const uploadedShorts = await this.uploadToStorage(shortsWithThumbnails, supabase, processing_id);
       
-      // 9. Save processing record to database
+      // 10. Save processing record to database
       await this.saveToDatabase(supabase, {
         processing_id,
         video_info: { ...video_info, ...videoDetails },
@@ -84,7 +105,7 @@ class YouTubeProcessor {
         metadata
       });
       
-      // 10. Cleanup temporary files
+      // 11. Cleanup temporary files
       await this.cleanup(processing_id);
       
       console.log(`[${processing_id}] YouTube processing completed successfully`);
@@ -100,7 +121,7 @@ class YouTubeProcessor {
         usage_stats: {
           original_duration: metadata.duration,
           original_size_mb: metadata.size_mb,
-          processing_time: `${Math.round(metadata.processing_time / 1000)} seconds`,
+          processing_time: `${Math.round((Date.now() - Date.now()) / 1000)} seconds`,
           shorts_total_duration: uploadedShorts.reduce((sum, short) => sum + (short.duration || 60), 0)
         }
       };
@@ -114,6 +135,41 @@ class YouTubeProcessor {
       }
       
       throw this.enhanceError(error, processing_id, video_url);
+    }
+  }
+
+  async ensureDirectories() {
+    const dirs = [this.tempDir, this.outputDir];
+    
+    for (const dir of dirs) {
+      try {
+        await fs.mkdir(dir, { recursive: true });
+      } catch (error) {
+        console.error(`Failed to create directory ${dir}:`, error);
+      }
+    }
+  }
+
+  async validateDownloadedFile(filePath, processingId) {
+    try {
+      const stats = await fs.stat(filePath);
+      
+      if (stats.size === 0) {
+        throw new Error('Downloaded file is empty');
+      }
+      
+      if (stats.size < 1024) { // Less than 1KB is likely an error page
+        const content = await fs.readFile(filePath, 'utf8');
+        if (content.includes('<!DOCTYPE html>') || content.includes('<html>')) {
+          throw new Error('Downloaded file is HTML (likely bot detection page)');
+        }
+      }
+      
+      console.log(`[${processingId}] Downloaded file size: ${Math.round(stats.size / 1024 / 1024)}MB`);
+      
+    } catch (error) {
+      console.error(`[${processingId}] File validation failed:`, error);
+      throw new Error(`Downloaded file validation failed: ${error.message}`);
     }
   }
 
@@ -134,9 +190,9 @@ class YouTubeProcessor {
 
   async getVideoInfoWithFallback(videoUrl, processingId) {
     const methods = [
+      () => this.getVideoInfoYoutubeDl(videoUrl),
       () => this.getVideoInfoDistube(videoUrl),
-      () => this.getVideoInfoYtdlCore(videoUrl),
-      () => this.getVideoInfoYoutubeDl(videoUrl)
+      () => this.getVideoInfoYtdlCore(videoUrl)
     ];
 
     let lastError;
@@ -144,47 +200,52 @@ class YouTubeProcessor {
     for (const [index, method] of methods.entries()) {
       try {
         console.log(`[${processingId}] Trying video info method ${index + 1}`);
-        return await method();
+        const result = await method();
+        console.log(`[${processingId}] Video info method ${index + 1} succeeded`);
+        return result;
       } catch (error) {
         lastError = error;
         console.warn(`[${processingId}] Video info method ${index + 1} failed: ${error.message}`);
+        
+        // Wait between attempts to avoid rate limiting
+        if (index < methods.length - 1) {
+          await this.sleep(1000);
+        }
       }
     }
     
     throw new Error(`All video info methods failed: ${lastError.message}`);
   }
 
-  async getVideoInfoDistube(videoUrl) {
-    try {
-      const info = await ytdlDistube.getInfo(videoUrl);
-      return this.extractVideoDetails(info.videoDetails);
-    } catch (error) {
-      throw new Error(`Distube getInfo failed: ${error.message}`);
-    }
-  }
-
-  async getVideoInfoYtdlCore(videoUrl) {
-    try {
-      const info = await ytdl.getInfo(videoUrl);
-      return this.extractVideoDetails(info.videoDetails);
-    } catch (error) {
-      throw new Error(`ytdl-core getInfo failed: ${error.message}`);
-    }
-  }
-
   async getVideoInfoYoutubeDl(videoUrl) {
     try {
+      const userAgent = this.getRandomUserAgent();
+      
       const info = await youtubedl(videoUrl, {
         dumpSingleJson: true,
         noCheckCertificate: true,
         noWarnings: true,
-        preferFreeFormats: true
+        preferFreeFormats: true,
+        userAgent: userAgent,
+        addHeader: [
+          `User-Agent:${userAgent}`,
+          'Accept-Language:en-US,en;q=0.9',
+          'Accept-Encoding:gzip, deflate, br',
+          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Connection:keep-alive',
+          'Upgrade-Insecure-Requests:1'
+        ],
+        referer: 'https://www.youtube.com/',
+        // Additional options to avoid bot detection
+        extractor: 'youtube',
+        youtubeSkipDashManifest: true,
+        format: 'best[height<=720]/best'
       });
       
       return {
         title: info.title || 'Unknown Title',
         description: (info.description || '').substring(0, 500),
-        author: info.uploader || 'Unknown',
+        author: info.uploader || info.channel || 'Unknown',
         duration: parseInt(info.duration) || 0,
         view_count: parseInt(info.view_count) || 0,
         upload_date: info.upload_date,
@@ -195,6 +256,36 @@ class YouTubeProcessor {
       };
     } catch (error) {
       throw new Error(`youtube-dl-exec getInfo failed: ${error.message}`);
+    }
+  }
+
+  async getVideoInfoDistube(videoUrl) {
+    try {
+      const agent = ytdlDistube.createAgent(JSON.parse('[]'), {
+        headers: {
+          'User-Agent': this.getRandomUserAgent()
+        }
+      });
+      
+      const info = await ytdlDistube.getInfo(videoUrl, { agent });
+      return this.extractVideoDetails(info.videoDetails);
+    } catch (error) {
+      throw new Error(`Distube getInfo failed: ${error.message}`);
+    }
+  }
+
+  async getVideoInfoYtdlCore(videoUrl) {
+    try {
+      const info = await ytdl.getInfo(videoUrl, {
+        requestOptions: {
+          headers: {
+            'User-Agent': this.getRandomUserAgent()
+          }
+        }
+      });
+      return this.extractVideoDetails(info.videoDetails);
+    } catch (error) {
+      throw new Error(`ytdl-core getInfo failed: ${error.message}`);
     }
   }
 
@@ -224,8 +315,8 @@ class YouTubeProcessor {
 
   async downloadVideoWithAllFallbacks(videoUrl, processingId) {
     const methods = [
-      () => this.downloadWithDistube(videoUrl, processingId),
       () => this.downloadWithYoutubeDl(videoUrl, processingId),
+      () => this.downloadWithDistube(videoUrl, processingId),
       () => this.downloadWithYtdlCore(videoUrl, processingId)
     ];
 
@@ -234,35 +325,192 @@ class YouTubeProcessor {
     for (const [index, method] of methods.entries()) {
       try {
         console.log(`[${processingId}] Trying download method ${index + 1}`);
-        return await method();
+        const result = await method();
+        console.log(`[${processingId}] Download method ${index + 1} succeeded`);
+        return result;
       } catch (error) {
         lastError = error;
         console.warn(`[${processingId}] Download method ${index + 1} failed: ${error.message}`);
         
+        // Clean up failed download attempt
+        try {
+          const failedPath = path.join(this.tempDir, `${processingId}_original.*`);
+          // Try to clean up any partial downloads
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+        
         // Wait before trying next method
         if (index < methods.length - 1) {
-          await this.sleep(2000);
+          await this.sleep(3000); // Increased wait time
         }
       }
     }
     
-    throw new Error(`All download methods failed: ${lastError.message}`);
+    throw new Error(`All download methods failed. Last error: ${lastError.message}`);
+  }
+
+  async downloadWithYoutubeDl(videoUrl, processingId) {
+    const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
+    const userAgent = this.getRandomUserAgent();
+    
+    try {
+      console.log(`[${processingId}] youtube-dl-exec: Starting download with user agent rotation`);
+      
+      await youtubedl(videoUrl, {
+        output: outputTemplate,
+        format: 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+        mergeOutputFormat: 'mp4',
+        noWarnings: true,
+        noCallHome: true,
+        noCheckCertificate: true,
+        preferFreeFormats: true,
+        youtubeSkipDashManifest: true,
+        userAgent: userAgent,
+        referer: 'https://www.youtube.com/',
+        addHeader: [
+          `User-Agent:${userAgent}`,
+          'Accept-Language:en-US,en;q=0.9',
+          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Connection:keep-alive'
+        ],
+        // Add retry options
+        retries: 3,
+        // Skip unavailable fragments
+        skipUnavailableFragments: true,
+        // Keep fragments for debugging if needed
+        keepFragments: false,
+        // Additional bot avoidance
+        sleep: Math.floor(Math.random() * 3) + 1 // Random sleep 1-3 seconds
+      });
+      
+      // Find the downloaded file
+      const files = await fs.readdir(this.tempDir);
+      const outputFile = files.find(file => file.startsWith(`${processingId}_original`));
+      
+      if (!outputFile) {
+        throw new Error('Downloaded file not found');
+      }
+      
+      const filePath = path.join(this.tempDir, outputFile);
+      console.log(`[${processingId}] youtube-dl-exec: Download completed: ${outputFile}`);
+      
+      return filePath;
+      
+    } catch (error) {
+      console.error(`[${processingId}] youtube-dl-exec download error:`, error.message);
+      
+      // Check if error is related to bot detection
+      if (error.message.includes('bot') || 
+          error.message.includes('sign in') || 
+          error.message.includes('verify') ||
+          error.message.includes('captcha')) {
+        throw new Error('YouTube bot detection triggered. Try again later or use a different video.');
+      }
+      
+      throw new Error(`youtube-dl-exec download failed: ${error.message}`);
+    }
   }
 
   async downloadWithDistube(videoUrl, processingId) {
     const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+    const userAgent = this.getRandomUserAgent();
     
     return new Promise((resolve, reject) => {
       const timeoutMs = 300000; // 5 minutes
       let timeoutHandle;
       
       try {
+        console.log(`[${processingId}] Distube: Starting download with enhanced headers`);
+        
+        const agent = ytdlDistube.createAgent(JSON.parse('[]'), {
+          headers: {
+            'User-Agent': userAgent,
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept': '*/*',
+            'Connection': 'keep-alive',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'cross-site'
+          }
+        });
+
         const stream = ytdlDistube(videoUrl, {
           quality: 'highest',
           filter: 'audioandvideo',
+          agent: agent,
           requestOptions: {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+              'User-Agent': userAgent,
+              'Accept-Language': 'en-US,en;q=0.9'
+            }
+          }
+        });
+        
+        const writeStream = require('fs').createWriteStream(outputPath);
+        
+        timeoutHandle = setTimeout(() => {
+          stream.destroy();
+          writeStream.destroy();
+          reject(new Error('Download timeout - video might be too large or connection is slow'));
+        }, timeoutMs);
+        
+        stream.on('error', (error) => {
+          clearTimeout(timeoutHandle);
+          writeStream.destroy();
+          
+          if (error.message.includes('Sign in to confirm')) {
+            reject(new Error('YouTube bot detection triggered. Try again later.'));
+          } else {
+            reject(error);
+          }
+        });
+        
+        writeStream.on('error', (error) => {
+          clearTimeout(timeoutHandle);
+          stream.destroy();
+          reject(error);
+        });
+        
+        writeStream.on('finish', () => {
+          clearTimeout(timeoutHandle);
+          console.log(`[${processingId}] Distube: Download completed`);
+          resolve(outputPath);
+        });
+        
+        stream.pipe(writeStream);
+        
+      } catch (error) {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        reject(error);
+      }
+    });
+  }
+
+  async downloadWithYtdlCore(videoUrl, processingId) {
+    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+    const userAgent = this.getRandomUserAgent();
+    
+    return new Promise((resolve, reject) => {
+      const timeoutMs = 300000;
+      let timeoutHandle;
+      
+      try {
+        console.log(`[${processingId}] ytdl-core: Starting download`);
+        
+        const stream = ytdl(videoUrl, {
+          quality: 'highest',
+          filter: format => {
+            return format.container === 'mp4' && 
+                   format.hasVideo && 
+                   format.hasAudio &&
+                   !format.isLive;
+          },
+          requestOptions: {
+            headers: {
+              'User-Agent': userAgent,
+              'Accept-Language': 'en-US,en;q=0.9'
             }
           }
         });
@@ -289,90 +537,7 @@ class YouTubeProcessor {
         
         writeStream.on('finish', () => {
           clearTimeout(timeoutHandle);
-          resolve(outputPath);
-        });
-        
-        stream.pipe(writeStream);
-        
-      } catch (error) {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        reject(error);
-      }
-    });
-  }
-
-  async downloadWithYoutubeDl(videoUrl, processingId) {
-    const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
-    
-    try {
-      await youtubedl(videoUrl, {
-        output: outputTemplate,
-        format: 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
-        mergeOutputFormat: 'mp4',
-        noWarnings: true,
-        noCallHome: true,
-        noCheckCertificate: true,
-        preferFreeFormats: true,
-        youtubeSkipDashManifest: true,
-        addHeader: [
-          'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ]
-      });
-      
-      // Find the downloaded file
-      const files = await fs.readdir(this.tempDir);
-      const outputFile = files.find(file => file.startsWith(`${processingId}_original`));
-      
-      if (!outputFile) {
-        throw new Error('Downloaded file not found');
-      }
-      
-      return path.join(this.tempDir, outputFile);
-      
-    } catch (error) {
-      throw new Error(`youtube-dl-exec download failed: ${error.message}`);
-    }
-  }
-
-  async downloadWithYtdlCore(videoUrl, processingId) {
-    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
-    
-    return new Promise((resolve, reject) => {
-      const timeoutMs = 300000;
-      let timeoutHandle;
-      
-      try {
-        const stream = ytdl(videoUrl, {
-          quality: 'highest',
-          filter: format => {
-            return format.container === 'mp4' && 
-                   format.hasVideo && 
-                   format.hasAudio;
-          }
-        });
-        
-        const writeStream = require('fs').createWriteStream(outputPath);
-        
-        timeoutHandle = setTimeout(() => {
-          stream.destroy();
-          writeStream.destroy();
-          reject(new Error('Download timeout - video might be too large'));
-        }, timeoutMs);
-        
-        stream.on('error', (error) => {
-          clearTimeout(timeoutHandle);
-          writeStream.destroy();
-          reject(error);
-        });
-        
-        writeStream.on('error', (error) => {
-          clearTimeout(timeoutHandle);
-          stream.destroy();
-          reject(error);
-        });
-        
-        writeStream.on('finish', () => {
-          clearTimeout(timeoutHandle);
+          console.log(`[${processingId}] ytdl-core: Download completed`);
           resolve(outputPath);
         });
         
@@ -760,7 +925,9 @@ class YouTubeProcessor {
   enhanceError(error, processingId, videoUrl) {
     const message = error.message.toLowerCase();
     
-    if (message.includes('video unavailable') || message.includes('private')) {
+    if (message.includes('sign in to confirm') || message.includes('bot')) {
+      return new Error('YouTube has detected automated access and is blocking the request. This is temporary - please try again in a few minutes or try a different video.');
+    } else if (message.includes('video unavailable') || message.includes('private')) {
       return new Error('This YouTube video is private, unavailable, or has been deleted. Please try a different video.');
     } else if (message.includes('age-restricted') || message.includes('age_restricted')) {
       return new Error('This video is age-restricted and cannot be processed. Please try a different video.');
@@ -772,6 +939,8 @@ class YouTubeProcessor {
       return new Error('Video file is too large for processing. Please try a shorter or lower quality video.');
     } else if (message.includes('too long') || message.includes('duration')) {
       return new Error('Video is too long for processing. Please try a shorter video.');
+    } else if (message.includes('invalid data') || message.includes('no video stream')) {
+      return new Error('The downloaded file appears to be corrupted or invalid. This may be due to YouTube bot detection. Please try again later.');
     } else if (message.includes('ffmpeg') || message.includes('encoding')) {
       return new Error('Video encoding failed. The video format may not be supported.');
     } else if (message.includes('download')) {
