@@ -1,4 +1,4 @@
-// index.js - Updated server with enhanced YouTube processor integration
+// index.js - Fixed server with proper Supabase configuration
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -12,24 +12,50 @@ const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 // Import ENHANCED processors
-const EnhancedYouTubeProcessor = require('./processors/youtube-processor'); // Your enhanced version
+const EnhancedYouTubeProcessor = require('./processors/youtube-processor'); // Your fixed version
 const TikTokProcessor = require('./processors/tiktok-processor');
 const BaseProcessor = require('./processors/base-processor');
 const SupabaseVideoProcessor = require('./processors/supabaseVideoProcessor');
 
-// Import YouTube bot avoidance utilities
-const { 
-  RateLimiter, 
-  YouTubeErrorHandler, 
-  youtubeBotAvoidanceConfig 
-} = require('./config/youtube-bot-avoidance');
+// Import YouTube bot avoidance utilities (if available)
+let RateLimiter, YouTubeErrorHandler, youtubeBotAvoidanceConfig;
+try {
+  const botAvoidance = require('./config/youtube-bot-avoidance');
+  RateLimiter = botAvoidance.RateLimiter;
+  YouTubeErrorHandler = botAvoidance.YouTubeErrorHandler;
+  youtubeBotAvoidanceConfig = botAvoidance.youtubeBotAvoidanceConfig;
+  console.log('YouTube bot avoidance loaded successfully');
+} catch (error) {
+  console.warn('YouTube bot avoidance module not found, using basic rate limiting');
+  // Fallback rate limiter
+  class FallbackRateLimiter {
+    async checkRateLimit() { return true; }
+  }
+  class FallbackErrorHandler {
+    async handleError(error) { throw error; }
+    reset() {}
+  }
+  RateLimiter = FallbackRateLimiter;
+  YouTubeErrorHandler = FallbackErrorHandler;
+  youtubeBotAvoidanceConfig = {
+    rateLimiting: { cooldownPeriod: 60000 }
+  };
+}
+
 
 const app = express();
+
+// FIX: Trust proxy for Render.com deployment
+app.set('trust proxy', true);
+
 const PORT = process.env.PORT || 10000;
 
-// Initialize YouTube rate limiter and error handler
+// Initialize YouTube components
 const youtubeRateLimiter = new RateLimiter(youtubeBotAvoidanceConfig);
 const youtubeErrorHandler = new YouTubeErrorHandler(youtubeBotAvoidanceConfig);
+
+
+
 
 // Middleware
 app.use(helmet());
@@ -39,7 +65,7 @@ app.use(cors({
   credentials: true
 }));
 
-// Enhanced rate limiting for YouTube requests
+// Enhanced rate limiting
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
@@ -48,10 +74,9 @@ const generalLimiter = rateLimit({
 
 const youtubeProcessingLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 10, // Only 10 YouTube processing requests per 5 minutes
+  max: 10,
   message: 'Too many YouTube processing requests. Please wait before trying again.',
   skip: (req) => {
-    // Skip rate limiting for non-YouTube URLs
     const videoUrl = req.body?.video_url;
     return videoUrl && !isYouTubeUrl(videoUrl);
   }
@@ -61,7 +86,6 @@ app.use('/process', youtubeProcessingLimiter);
 app.use('/process-video', youtubeProcessingLimiter);
 app.use(generalLimiter);
 
-// Logging with enhanced YouTube request tracking
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Body parsing
@@ -85,15 +109,21 @@ const upload = multer({
   }
 });
 
-// Initialize processors with enhanced YouTube processor
+// Initialize processors
 const processors = {
-  'YouTube': new EnhancedYouTubeProcessor(), // Using enhanced processor
+  'YouTube': new EnhancedYouTubeProcessor(),
   'TikTok': new TikTokProcessor(),
   'Other': new BaseProcessor()
 };
 
-// Initialize Supabase processor for free plan optimization
-const supabaseProcessor = new SupabaseVideoProcessor();
+// Initialize Supabase processor (with error handling)
+let supabaseProcessor = null;
+try {
+  supabaseProcessor = new SupabaseVideoProcessor();
+  console.log('Supabase processor initialized successfully');
+} catch (error) {
+  console.warn('Supabase processor initialization failed:', error.message);
+}
 
 // Enhanced authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -130,7 +160,7 @@ function isYouTubeUrl(url) {
   return lowerUrl.includes('youtube.com') || lowerUrl.includes('youtu.be');
 }
 
-// Create temp directories if they don't exist
+// Create temp directories
 async function initializeTempDirs() {
   const dirs = ['/tmp/uploads', '/tmp/processing', '/tmp/output'];
   
@@ -146,14 +176,16 @@ async function initializeTempDirs() {
   }
 }
 
-// Enhanced health check endpoint with YouTube processor status
+// Enhanced health check endpoint
 app.get('/health', async (req, res) => {
   try {
     let storageStats = {};
-    try {
-      storageStats = await supabaseProcessor.storage.getStorageStats();
-    } catch (err) {
-      storageStats = { error: 'Could not fetch storage stats' };
+    if (supabaseProcessor) {
+      try {
+        storageStats = await supabaseProcessor.storage.getStorageStats();
+      } catch (err) {
+        storageStats = { error: 'Could not fetch storage stats' };
+      }
     }
     
     res.status(200).json({
@@ -169,12 +201,16 @@ app.get('/health', async (req, res) => {
           rate_limiting: 'active'
         },
         tiktok: 'standard',
-        supabase: 'optimized'
+        supabase: supabaseProcessor ? 'available' : 'unavailable'
       },
       endpoints: ['/process', '/process-video', '/upload-and-process', '/cleanup'],
       storage: {
         supabase: storageStats,
         plan: 'free-tier-optimized'
+      },
+      config: {
+        supabase_url: process.env.SUPABASE_URL ? 'configured' : 'missing',
+        supabase_key: process.env.SUPABASE_SERVICE_KEY ? 'configured' : 'missing'
       }
     });
   } catch (error) {
@@ -187,7 +223,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// ENHANCED: /process endpoint with YouTube bot detection handling
+// FIXED: /process endpoint with proper Supabase config validation
 app.post('/process', authenticateToken, async (req, res) => {
   const startTime = Date.now();
   let processingId = req.body.processing_id || uuidv4();
@@ -240,8 +276,9 @@ app.post('/process', authenticateToken, async (req, res) => {
       }
     }
 
-    const finalCallbackUrl = callback_url || 
-      (business_bot_url ? `${business_bot_url}/webhook/n8n-callback` : null);
+const finalCallbackUrl = callback_url || 
+  (business_bot_url ? `${business_bot_url}/webhook/n8n-callback` : null) ||
+  process.env.DEFAULT_CALLBACK_URL;
 
     if (!finalCallbackUrl) {
       return res.status(400).json({
@@ -261,7 +298,7 @@ app.post('/process', authenticateToken, async (req, res) => {
       processor_type: isYouTubeUrl(video_url) ? 'enhanced_youtube' : 'standard'
     });
 
-    // Start enhanced background processing
+    // Start enhanced background processing with FIXED Supabase config
     processVideoBackgroundEnhanced({
       processing_id: processingId,
       telegram_id,
@@ -275,7 +312,12 @@ app.post('/process', authenticateToken, async (req, res) => {
       platform: platform || detectPlatformFromUrl(video_url),
       subscription_type,
       user_limits,
-      supabase_config: supabase,
+      // FIX: Properly construct Supabase config
+      supabase_config: {
+        url: process.env.SUPABASE_URL,
+        service_key: process.env.SUPABASE_SERVICE_KEY,
+        ...supabase
+      },
       storage_config: storage,
       callback_url: finalCallbackUrl,
       business_bot_url,
@@ -295,85 +337,7 @@ app.post('/process', authenticateToken, async (req, res) => {
   }
 });
 
-// ENHANCED: process-video endpoint with better error handling
-app.post('/process-video', authenticateToken, async (req, res) => {
-  const startTime = Date.now();
-  let processingId = req.body.processing_id || uuidv4();
-  
-  console.log(`[${processingId}] Starting Supabase-optimized video processing`);
-  
-  try {
-    const {
-      telegram_id,
-      chat_id,
-      video_url,
-      subscription_type = 'free',
-      callback_url
-    } = req.body;
-
-    // Input validation
-    if (!video_url || !callback_url) {
-      return res.status(400).json({
-        error: 'Missing required fields: video_url, callback_url',
-        processing_id: processingId
-      });
-    }
-
-    if (!telegram_id || !chat_id) {
-      return res.status(400).json({
-        error: 'Missing telegram identifiers: telegram_id, chat_id',
-        processing_id: processingId
-      });
-    }
-
-    // Enhanced YouTube rate limiting check for Supabase endpoint too
-    if (isYouTubeUrl(video_url)) {
-      try {
-        await youtubeRateLimiter.checkRateLimit('youtube.com');
-      } catch (rateLimitError) {
-        return res.status(429).json({
-          error: rateLimitError.message,
-          processing_id: processingId,
-          error_type: 'rate_limit'
-        });
-      }
-    }
-
-    // Immediate response
-    res.status(202).json({
-      status: 'accepted',
-      processing_id: processingId,
-      message: 'Video processing started with Supabase storage and enhanced YouTube support',
-      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
-      accepted_at: new Date().toISOString(),
-      storage_method: 'supabase-optimized'
-    });
-
-    // Start Supabase-optimized background processing with enhanced YouTube support
-    processWithSupabaseStorageEnhanced({
-      processing_id: processingId,
-      telegram_id,
-      chat_id,
-      video_url,
-      subscription_type,
-      callback_url,
-      start_time: startTime
-    }).catch(error => {
-      console.error(`[${processingId}] Supabase processing failed:`, error);
-    });
-
-  } catch (error) {
-    console.error(`[${processingId}] Processing request failed:`, error);
-    
-    res.status(500).json({
-      error: error.message,
-      processing_id: processingId,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// ENHANCED: Background processing with YouTube bot detection handling
+// ENHANCED: Background processing with FIXED Supabase configuration
 async function processVideoBackgroundEnhanced(data) {
   const { processing_id, telegram_id, chat_id, video_url } = data;
   console.log(`[${processing_id}] Starting enhanced background processing for user ${telegram_id}`);
@@ -389,7 +353,7 @@ async function processVideoBackgroundEnhanced(data) {
       
       console.log(`[${processing_id}] Using processor: ${platform} (attempt ${processingAttempt}/${maxAttempts})`);
       
-      // Enhanced processing data for processors
+      // FIXED: Enhanced processing data with proper Supabase config validation
       const processingData = {
         ...data,
         video_info: {
@@ -397,12 +361,14 @@ async function processVideoBackgroundEnhanced(data) {
           platform: platform,
           url: video_url
         },
-        supabase_config: {
-          url: process.env.SUPABASE_URL,
-          service_key: process.env.SUPABASE_SERVICE_KEY,
-          ...data.supabase_config
-        }
+        // FIX: Ensure both url and service_key are present before creating config
+        supabase_config: (data.supabase_config?.url && data.supabase_config?.service_key) ? {
+          url: data.supabase_config.url,
+          service_key: data.supabase_config.service_key
+        } : null
       };
+      
+      console.log(`[${processing_id}] Supabase config status: ${processingData.supabase_config ? 'configured' : 'not configured'}`);
       
       // Set processing timeout
       const processingTimeout = parseInt(process.env.MAX_PROCESSING_TIME) || 600000;
@@ -438,7 +404,8 @@ async function processVideoBackgroundEnhanced(data) {
           videos_processed: 1,
           shorts_created: result.total_shorts || (result.shorts_results?.length || result.shorts?.length || 0),
           quality: data.subscription_type === 'free' ? '720p' : '1080p',
-          processing_method: 'enhanced_youtube'
+          processing_method: 'enhanced_youtube',
+          storage_method: result.usage_stats?.storage_method || 'unknown'
         }
       });
       
@@ -449,12 +416,16 @@ async function processVideoBackgroundEnhanced(data) {
       
       // Handle YouTube bot detection with enhanced error handling
       if (isYouTubeUrl(video_url)) {
-        const errorResponse = await youtubeErrorHandler.handleError(error, processingAttempt);
-        
-        if (errorResponse.errorType === 'bot_detection' && processingAttempt < maxAttempts) {
-          console.log(`[${processing_id}] Bot detection handled, retrying in ${errorResponse.waitTime / 1000}s...`);
-          processingAttempt++;
-          continue; // Retry
+        try {
+          const errorResponse = await youtubeErrorHandler.handleError(error, processingAttempt);
+          
+          if (errorResponse.errorType === 'bot_detection' && processingAttempt < maxAttempts) {
+            console.log(`[${processing_id}] Bot detection handled, retrying in ${errorResponse.waitTime / 1000}s...`);
+            processingAttempt++;
+            continue; // Retry
+          }
+        } catch (handlerError) {
+          console.error(`[${processing_id}] Error handler failed:`, handlerError);
         }
       }
       
@@ -484,17 +455,28 @@ async function processVideoBackgroundEnhanced(data) {
   }
 }
 
-// ENHANCED: Supabase processing with YouTube bot detection
+// ENHANCED: Supabase processing with FIXED configuration
 async function processWithSupabaseStorageEnhanced(data) {
   const { processing_id, telegram_id, chat_id, video_url } = data;
   console.log(`[${processing_id}] Starting enhanced Supabase processing for user ${telegram_id}`);
   
   try {
-    // For YouTube URLs, use the enhanced YouTube processor instead of basic Supabase processor
+    // For YouTube URLs, use the enhanced YouTube processor
     if (isYouTubeUrl(video_url)) {
       console.log(`[${processing_id}] Using enhanced YouTube processor for Supabase storage`);
       
       const youtubeProcessor = processors['YouTube'];
+      
+      // FIX: Properly construct Supabase config with validation
+      const supabaseConfig = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) ? {
+        url: process.env.SUPABASE_URL,
+        service_key: process.env.SUPABASE_SERVICE_KEY
+      } : null;
+      
+      if (!supabaseConfig) {
+        console.warn(`[${processing_id}] Supabase config missing, processing without cloud storage`);
+      }
+      
       const result = await youtubeProcessor.process({
         processing_id: processing_id,
         video_url: video_url,
@@ -505,10 +487,7 @@ async function processWithSupabaseStorageEnhanced(data) {
         },
         subscription_type: data.subscription_type,
         user_limits: { max_shorts: data.subscription_type === 'free' ? 2 : 5 },
-        supabase_config: {
-          url: process.env.SUPABASE_URL,
-          service_key: process.env.SUPABASE_SERVICE_KEY
-        }
+        supabase_config: supabaseConfig
       });
       
       console.log(`[${processing_id}] Enhanced YouTube processing completed successfully`);
@@ -527,13 +506,17 @@ async function processWithSupabaseStorageEnhanced(data) {
         usage_stats: {
           processing_time: `${Math.floor((Date.now() - data.start_time) / 1000)} seconds`,
           quality: data.subscription_type === 'free' ? '720p' : '1080p',
-          storage_used: 'supabase-free-tier',
+          storage_used: supabaseConfig ? 'supabase-cloud' : 'local-files',
           processing_method: 'enhanced_youtube_with_supabase'
         }
       });
       
     } else {
-      // Use basic Supabase processor for non-YouTube URLs
+      // Use basic Supabase processor for non-YouTube URLs (if available)
+      if (!supabaseProcessor) {
+        throw new Error('Supabase processor not available and non-YouTube URL provided');
+      }
+      
       const result = await supabaseProcessor.processVideo(video_url, {
         quality: data.subscription_type === 'free' ? 'medium' : 'high',
         maxDuration: data.subscription_type === 'free' ? 300 : 600
@@ -610,12 +593,14 @@ function categorizeError(error) {
     return 'file_size_error';
   } else if (errorMessage.includes('invalid data')) {
     return 'corrupted_download';
+  } else if (errorMessage.includes('supabasekey') || errorMessage.includes('supabase')) {
+    return 'configuration_error';
   } else {
     return 'unknown_error';
   }
 }
 
-// Platform detection helper (unchanged)
+// Platform detection helper
 function detectPlatformFromUrl(url) {
   const lowerUrl = url.toLowerCase();
   
@@ -670,7 +655,7 @@ async function sendCallback(callbackUrl, data, retries = 3) {
   }
 }
 
-// Keep all existing endpoints (status, upload-and-process, cleanup) unchanged
+// Keep existing endpoints with minor improvements
 app.get('/status/:processing_id', authenticateToken, async (req, res) => {
   const { processing_id } = req.params;
   
@@ -712,7 +697,12 @@ app.post('/upload-and-process', authenticateToken, upload.single('video'), async
       video_info: {
         title: req.file.originalname,
         platform: 'Upload'
-      }
+      },
+      // FIX: Proper Supabase config for uploads too
+      supabase_config: (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) ? {
+        url: process.env.SUPABASE_URL,
+        service_key: process.env.SUPABASE_SERVICE_KEY
+      } : null
     };
     
     res.status(202).json({
@@ -726,7 +716,10 @@ app.post('/upload-and-process', authenticateToken, upload.single('video'), async
       }
     });
     
-    processVideoBackgroundEnhanced(processingData).catch(console.error);
+    processVideoBackgroundEnhanced({
+      ...processingData,
+      start_time: Date.now()
+    }).catch(console.error);
     
   } catch (error) {
     console.error(`[${processingId}] Upload processing failed:`, error);
@@ -764,17 +757,22 @@ app.post('/cleanup', authenticateToken, async (req, res) => {
       }
     }
     
-    try {
-      await supabaseProcessor.performMaintenance();
-    } catch (supabaseError) {
-      console.warn('Supabase cleanup failed:', supabaseError.message);
+    // Supabase cleanup if available
+    if (supabaseProcessor) {
+      try {
+        await supabaseProcessor.performMaintenance();
+      } catch (supabaseError) {
+        console.warn('Supabase cleanup failed:', supabaseError.message);
+      }
     }
     
     let storageStats = {};
-    try {
-      storageStats = await supabaseProcessor.storage.getStorageStats();
-    } catch (err) {
-      storageStats = { error: 'Could not fetch storage stats' };
+    if (supabaseProcessor) {
+      try {
+        storageStats = await supabaseProcessor.storage.getStorageStats();
+      } catch (err) {
+        storageStats = { error: 'Could not fetch storage stats' };
+      }
     }
     
     res.json({
@@ -832,11 +830,13 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-// Auto-cleanup every 30 minutes with enhanced YouTube processor awareness
-setInterval(() => {
-  supabaseProcessor.performMaintenance()
-    .catch(err => console.error('Auto-cleanup error:', err.message));
-}, 30 * 60 * 1000);
+// Auto-cleanup every 30 minutes
+if (supabaseProcessor) {
+  setInterval(() => {
+    supabaseProcessor.performMaintenance()
+      .catch(err => console.error('Auto-cleanup error:', err.message));
+  }, 30 * 60 * 1000);
+}
 
 // Initialize and start server
 async function startServer() {
@@ -850,10 +850,11 @@ async function startServer() {
       console.log(`🎬 Enhanced Supabase endpoint: http://localhost:${PORT}/process-video`);
       console.log(`📁 Upload endpoint: http://localhost:${PORT}/upload-and-process`);
       console.log(`🧹 Cleanup endpoint: http://localhost:${PORT}/cleanup`);
-      console.log(`💾 Storage: Supabase-optimized for free tier`);
-      console.log(`🤖 YouTube Bot Avoidance: ENABLED`);
+      console.log(`💾 Storage: ${supabaseProcessor ? 'Supabase-optimized' : 'Local files only'}`);
+      console.log(`🤖 YouTube Bot Avoidance: ${RateLimiter ? 'ENABLED' : 'BASIC'}`);
       console.log(`⚡ Rate Limiting: Enhanced for YouTube`);
       console.log(`Environment: ${process.env.NODE_ENV}`);
+      console.log(`Supabase Config: URL=${process.env.SUPABASE_URL ? 'SET' : 'MISSING'}, KEY=${process.env.SUPABASE_SERVICE_KEY ? 'SET' : 'MISSING'}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -862,3 +863,84 @@ async function startServer() {
 }
 
 startServer();
+  }
+});
+
+// FIXED: process-video endpoint with proper config
+// FIXED: process-video endpoint with proper config
+app.post('/process-video', authenticateToken, async (req, res) => {
+  const startTime = Date.now();
+  let processingId = req.body.processing_id || uuidv4();
+  
+  console.log(`[${processingId}] Starting Supabase-optimized video processing`);
+  
+  try {
+    const {
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type = 'free',
+      callback_url
+    } = req.body;
+
+    // Input validation
+    if (!video_url || !callback_url) {
+      return res.status(400).json({
+        error: 'Missing required fields: video_url, callback_url',
+        processing_id: processingId
+      });
+    }
+
+    if (!telegram_id || !chat_id) {
+      return res.status(400).json({
+        error: 'Missing telegram identifiers: telegram_id, chat_id',
+        processing_id: processingId
+      });
+    }
+
+    // Enhanced YouTube rate limiting check
+    if (isYouTubeUrl(video_url)) {
+      try {
+        await youtubeRateLimiter.checkRateLimit('youtube.com');
+      } catch (rateLimitError) {
+        return res.status(429).json({
+          error: rateLimitError.message,
+          processing_id: processingId,
+          error_type: 'rate_limit'
+        });
+      }
+    }
+
+    // Immediate response
+    res.status(202).json({
+      status: 'accepted',
+      processing_id: processingId,
+      message: 'Video processing started with Supabase storage and enhanced YouTube support',
+      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
+      accepted_at: new Date().toISOString(),
+      storage_method: 'supabase-optimized'
+    });
+
+    // Start Supabase-optimized background processing
+    processWithSupabaseStorageEnhanced({
+      processing_id: processingId,
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type,
+      callback_url,
+      start_time: startTime
+    }).catch(error => {
+      console.error(`[${processingId}] Supabase processing failed:`, error);
+    });
+
+  } catch (error) {
+    console.error(`[${processingId}] Processing request failed:`, error);
+    
+    res.status(500).json({
+      error: error.message,
+      processing_id: processingId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
