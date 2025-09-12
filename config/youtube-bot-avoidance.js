@@ -1,294 +1,374 @@
-// config/youtube-bot-avoidance.js - Additional configuration for bot detection avoidance
+// config/youtube-bot-avoidance.js - Enhanced bot detection avoidance
+const { EventEmitter } = require('events');
 
+class RateLimiter extends EventEmitter {
+  constructor(config) {
+    super();
+    this.config = config.rateLimiting;
+    this.requestHistory = new Map();
+    this.globalBackoff = 0;
+    this.consecutiveFailures = 0;
+  }
+
+  async checkRateLimit(url) {
+    const domain = this.extractDomain(url);
+    const now = Date.now();
+    const history = this.requestHistory.get(domain) || [];
+    
+    // Clean old entries
+    const validHistory = history.filter(time => now - time < this.config.windowMs);
+    
+    // Apply global backoff
+    if (this.globalBackoff > now) {
+      const waitTime = this.globalBackoff - now;
+      throw new Error(`Global rate limit active. Wait ${Math.ceil(waitTime / 1000)} seconds.`);
+    }
+    
+    // Check request count in window
+    if (validHistory.length >= this.config.maxRequests) {
+      const waitTime = this.config.windowMs - (now - validHistory[0]);
+      throw new Error(`Rate limit exceeded for ${domain}. Wait ${Math.ceil(waitTime / 1000)} seconds.`);
+    }
+    
+    // Apply exponential backoff for consecutive failures
+    if (this.consecutiveFailures > 0) {
+      const backoffTime = Math.min(
+        this.config.maxBackoffTime,
+        this.config.baseBackoffTime * Math.pow(2, this.consecutiveFailures)
+      );
+      
+      if (validHistory.length > 0 && now - validHistory[validHistory.length - 1] < backoffTime) {
+        const waitTime = backoffTime - (now - validHistory[validHistory.length - 1]);
+        throw new Error(`Exponential backoff active. Wait ${Math.ceil(waitTime / 1000)} seconds.`);
+      }
+    }
+    
+    // Record this request
+    validHistory.push(now);
+    this.requestHistory.set(domain, validHistory);
+    
+    this.emit('requestAllowed', { domain, timestamp: now });
+    return true;
+  }
+
+  recordFailure(error) {
+    this.consecutiveFailures++;
+    
+    if (this.isBotDetectionError(error)) {
+      // Activate global backoff for bot detection
+      const backoffTime = Math.min(
+        this.config.maxGlobalBackoff,
+        this.config.botDetectionBackoff * Math.pow(2, Math.min(this.consecutiveFailures, 5))
+      );
+      
+      this.globalBackoff = Date.now() + backoffTime;
+      this.emit('botDetectionTriggered', { backoffTime, failures: this.consecutiveFailures });
+    }
+  }
+
+  recordSuccess() {
+    this.consecutiveFailures = 0;
+    this.globalBackoff = 0;
+    this.emit('requestSucceeded');
+  }
+
+  extractDomain(url) {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  isBotDetectionError(error) {
+    const message = error.message.toLowerCase();
+    return message.includes('sign in to confirm') ||
+           message.includes('bot') ||
+           message.includes('verify') ||
+           message.includes('captcha') ||
+           message.includes('blocked') ||
+           message.includes('403') ||
+           message.includes('429');
+  }
+}
+
+class YouTubeErrorHandler {
+  constructor(config) {
+    this.config = config.errorHandling;
+    this.errorCounts = new Map();
+    this.circuitBreakerState = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
+    this.circuitBreakerOpenTime = 0;
+  }
+
+  async handleError(error, attempt) {
+    const errorType = this.categorizeError(error);
+    
+    // Update error counts
+    const count = this.errorCounts.get(errorType) || 0;
+    this.errorCounts.set(errorType, count + 1);
+    
+    // Check circuit breaker
+    if (this.circuitBreakerState === 'OPEN') {
+      const now = Date.now();
+      if (now - this.circuitBreakerOpenTime > this.config.circuitBreakerTimeout) {
+        this.circuitBreakerState = 'HALF_OPEN';
+      } else {
+        throw new Error('Circuit breaker is OPEN. Service temporarily unavailable.');
+      }
+    }
+    
+    // Handle specific error types
+    switch (errorType) {
+      case 'bot_detection':
+        return await this.handleBotDetection(error, attempt);
+      
+      case 'rate_limit':
+        return await this.handleRateLimit(error, attempt);
+      
+      case 'network_timeout':
+        return await this.handleNetworkTimeout(error, attempt);
+      
+      case 'video_unavailable':
+        throw new Error('Video is unavailable or private');
+      
+      case 'age_restricted':
+        throw new Error('Video is age-restricted');
+      
+      case 'region_blocked':
+        throw new Error('Video is blocked in your region');
+      
+      default:
+        if (attempt >= this.config.maxRetries) {
+          this.openCircuitBreaker();
+          throw error;
+        }
+        
+        const delay = this.calculateBackoffDelay(attempt);
+        return { shouldRetry: true, waitTime: delay, errorType };
+    }
+  }
+
+  async handleBotDetection(error, attempt) {
+    if (attempt >= this.config.maxBotDetectionRetries) {
+      this.openCircuitBreaker();
+      throw new Error('YouTube bot detection: Maximum retries exceeded. Please try again later.');
+    }
+    
+    // Aggressive backoff for bot detection
+    const baseDelay = this.config.botDetectionBackoff;
+    const jitter = Math.random() * 0.3 + 0.85; // 85-115% of base delay
+    const waitTime = Math.min(
+      this.config.maxBotDetectionBackoff,
+      baseDelay * Math.pow(2, attempt) * jitter
+    );
+    
+    return {
+      shouldRetry: true,
+      waitTime,
+      errorType: 'bot_detection',
+      message: `Bot detection triggered. Waiting ${Math.ceil(waitTime / 1000)}s before retry ${attempt + 1}`
+    };
+  }
+
+  async handleRateLimit(error, attempt) {
+    if (attempt >= this.config.maxRetries) {
+      throw new Error('Rate limit: Maximum retries exceeded');
+    }
+    
+    // Extract wait time from error if available
+    let waitTime = this.config.rateLimitBackoff;
+    const retryAfterMatch = error.message.match(/retry after (\d+)/i);
+    if (retryAfterMatch) {
+      waitTime = parseInt(retryAfterMatch[1]) * 1000;
+    }
+    
+    return {
+      shouldRetry: true,
+      waitTime: Math.min(waitTime, this.config.maxRateLimitBackoff),
+      errorType: 'rate_limit'
+    };
+  }
+
+  async handleNetworkTimeout(error, attempt) {
+    if (attempt >= this.config.maxRetries) {
+      throw new Error('Network timeout: Maximum retries exceeded');
+    }
+    
+    const waitTime = this.calculateBackoffDelay(attempt);
+    return {
+      shouldRetry: true,
+      waitTime,
+      errorType: 'network_timeout'
+    };
+  }
+
+  categorizeError(error) {
+    const message = error.message.toLowerCase();
+    
+    if (message.includes('sign in to confirm') || 
+        message.includes('bot') || 
+        message.includes('verify')) {
+      return 'bot_detection';
+    } else if (message.includes('rate limit') || 
+               message.includes('429') || 
+               message.includes('quota exceeded')) {
+      return 'rate_limit';
+    } else if (message.includes('timeout') || 
+               message.includes('network') ||
+               message.includes('econnreset')) {
+      return 'network_timeout';
+    } else if (message.includes('video unavailable') || 
+               message.includes('private')) {
+      return 'video_unavailable';
+    } else if (message.includes('age-restricted') || 
+               message.includes('age_restricted')) {
+      return 'age_restricted';
+    } else if (message.includes('region') || 
+               message.includes('blocked')) {
+      return 'region_blocked';
+    } else if (message.includes('403')) {
+      return 'forbidden';
+    } else if (message.includes('404')) {
+      return 'not_found';
+    } else if (message.includes('500') || 
+               message.includes('502') || 
+               message.includes('503')) {
+      return 'server_error';
+    } else {
+      return 'unknown';
+    }
+  }
+
+  calculateBackoffDelay(attempt) {
+    const baseDelay = this.config.baseBackoffDelay;
+    const maxDelay = this.config.maxBackoffDelay;
+    const jitter = Math.random() * 0.3 + 0.85; // Add jitter to prevent thundering herd
+    
+    return Math.min(maxDelay, baseDelay * Math.pow(2, attempt) * jitter);
+  }
+
+  openCircuitBreaker() {
+    this.circuitBreakerState = 'OPEN';
+    this.circuitBreakerOpenTime = Date.now();
+  }
+
+  reset() {
+    this.errorCounts.clear();
+    this.circuitBreakerState = 'CLOSED';
+    this.circuitBreakerOpenTime = 0;
+  }
+
+  getStats() {
+    return {
+      errorCounts: Object.fromEntries(this.errorCounts),
+      circuitBreakerState: this.circuitBreakerState,
+      circuitBreakerOpenTime: this.circuitBreakerOpenTime
+    };
+  }
+}
+
+class ProxyRotator {
+  constructor(proxies = []) {
+    this.proxies = proxies;
+    this.currentIndex = 0;
+    this.failedProxies = new Set();
+    this.proxyStats = new Map();
+  }
+
+  getNextProxy() {
+    if (this.proxies.length === 0) return null;
+    
+    let attempts = 0;
+    while (attempts < this.proxies.length) {
+      const proxy = this.proxies[this.currentIndex];
+      this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
+      
+      if (!this.failedProxies.has(proxy)) {
+        return proxy;
+      }
+      
+      attempts++;
+    }
+    
+    return null; // All proxies failed
+  }
+
+  markProxyFailed(proxy) {
+    this.failedProxies.add(proxy);
+    const stats = this.proxyStats.get(proxy) || { failures: 0, lastFailure: 0 };
+    stats.failures++;
+    stats.lastFailure = Date.now();
+    this.proxyStats.set(proxy, stats);
+  }
+
+  markProxySuccessful(proxy) {
+    this.failedProxies.delete(proxy);
+    const stats = this.proxyStats.get(proxy) || { failures: 0, lastFailure: 0 };
+    stats.failures = Math.max(0, stats.failures - 1);
+    this.proxyStats.set(proxy, stats);
+  }
+
+  resetFailedProxies() {
+    // Reset proxies that failed more than 5 minutes ago
+    const now = Date.now();
+    const resetThreshold = 5 * 60 * 1000; // 5 minutes
+    
+    for (const [proxy, stats] of this.proxyStats.entries()) {
+      if (now - stats.lastFailure > resetThreshold) {
+        this.failedProxies.delete(proxy);
+      }
+    }
+  }
+}
+
+// Configuration object
 const youtubeBotAvoidanceConfig = {
-  // Rate limiting to avoid being flagged
   rateLimiting: {
-    maxRequestsPerMinute: 10,
-    maxRequestsPerHour: 300,
-    cooldownPeriod: 60000, // 1 minute
-    backoffMultiplier: 2,
-    maxBackoffTime: 300000 // 5 minutes
+    maxRequests: 5,
+    windowMs: 60000, // 1 minute
+    baseBackoffTime: 5000, // 5 seconds
+    maxBackoffTime: 300000, // 5 minutes
+    botDetectionBackoff: 30000, // 30 seconds
+    maxGlobalBackoff: 1800000 // 30 minutes
   },
-
-  // Enhanced user agent rotation
+  
+  errorHandling: {
+    maxRetries: 3,
+    maxBotDetectionRetries: 5,
+    baseBackoffDelay: 2000, // 2 seconds
+    maxBackoffDelay: 60000, // 1 minute
+    botDetectionBackoff: 15000, // 15 seconds
+    maxBotDetectionBackoff: 300000, // 5 minutes
+    rateLimitBackoff: 10000, // 10 seconds
+    maxRateLimitBackoff: 120000, // 2 minutes
+    circuitBreakerTimeout: 300000 // 5 minutes
+  },
+  
   userAgents: [
-    // Chrome on Windows
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    
-    // Chrome on macOS
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    
-    // Firefox
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:123.0) Gecko/20100101 Firefox/123.0',
-    
-    // Safari
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
-    
-    // Edge
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15'
   ],
-
-  // Headers that make requests look more human
-  humanHeaders: {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Language': 'en-US,en;q=0.9,de;q=0.8,fr;q=0.7',
+  
+  headers: {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
     'Upgrade-Insecure-Requests': '1',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-Site': 'none',
     'Sec-Fetch-User': '?1',
-    'Cache-Control': 'max-age=0',
-    'DNT': '1'
-  },
-
-  // Referrers to use for requests
-  referrers: [
-    'https://www.google.com/',
-    'https://www.bing.com/',
-    'https://duckduckgo.com/',
-    'https://www.youtube.com/',
-    'https://www.reddit.com/',
-    'https://twitter.com/'
-  ],
-
-  // Download options for different tools
-  downloadOptions: {
-    youtubeDl: {
-      maxFileSize: '100M',
-      socketTimeout: 30,
-      retries: 5,
-      fragmentRetries: 10,
-      skipUnavailableFragments: true,
-      keepFragments: false,
-      bufferSize: '16K',
-      httpChunkSize: '10M',
-      // Simulate slower connection
-      limitRate: '3M',
-      // Random sleep between requests
-      sleepInterval: 2,
-      maxSleepInterval: 10,
-      // Use cookies from browser if available
-      cookiesFromBrowser: 'chrome',
-      // Additional options
-      noCallHome: true,
-      noCheckCertificate: true,
-      preferFreeFormats: true,
-      youtubeSkipDashManifest: true,
-      extractFlat: false,
-      writeDescription: false,
-      writeInfoJson: false,
-      writeThumbnail: false,
-      writeAnnotations: false
-    },
-    
-    ytdlCore: {
-      quality: 'highest',
-      filter: 'audioandvideo',
-      highWaterMark: 1024 * 1024, // 1MB
-      dlChunkSize: 1024 * 1024 * 2, // 2MB
-      requestOptions: {
-        timeout: 30000,
-        maxRedirects: 5,
-        maxRetries: 3,
-        retryDelay: 1000
-      }
-    },
-
-    distube: {
-      quality: 'highest',
-      filter: 'audioandvideo',
-      highWaterMark: 1024 * 1024,
-      dlChunkSize: 1024 * 1024 * 2
-    }
-  },
-
-  // Timing configurations
-  delays: {
-    betweenRequests: {
-      min: 2000,
-      max: 8000
-    },
-    afterBotDetection: {
-      min: 15000,
-      max: 30000
-    },
-    beforeRetry: {
-      min: 5000,
-      max: 15000
-    }
-  },
-
-  // Error patterns that indicate bot detection
-  botDetectionPatterns: [
-    'sign in to confirm',
-    'verify you\'re not a bot',
-    'captcha',
-    'blocked',
-    'forbidden',
-    '403',
-    '429',
-    'too many requests',
-    'rate limit',
-    'quota exceeded',
-    'service unavailable',
-    'temporarily unavailable'
-  ],
-
-  // Proxy configuration (if using proxies)
-  proxy: {
-    enabled: false, // Set to true if you have proxies
-    rotation: true,
-    timeout: 30000,
-    retries: 3,
-    list: [
-      // Add your proxy list here
-      // 'http://proxy1:port',
-      // 'http://proxy2:port'
-    ]
+    'Cache-Control': 'max-age=0'
   }
 };
 
-// Rate limiting implementation
-class RateLimiter {
-  constructor(config) {
-    this.config = config.rateLimiting;
-    this.requests = new Map(); // domain -> { count, firstRequest, blocked }
-    this.globalRequests = [];
-  }
-
-  async checkRateLimit(domain = 'youtube.com') {
-    const now = Date.now();
-    const domainData = this.requests.get(domain) || { count: 0, firstRequest: now, blocked: false };
-
-    // Clean old requests
-    this.globalRequests = this.globalRequests.filter(time => now - time < 3600000); // 1 hour
-    
-    // Check if domain is temporarily blocked
-    if (domainData.blocked && now - domainData.firstRequest < this.config.cooldownPeriod) {
-      const waitTime = this.config.cooldownPeriod - (now - domainData.firstRequest);
-      throw new Error(`Rate limited. Please wait ${Math.ceil(waitTime / 1000)} seconds.`);
-    }
-
-    // Reset if cooldown period has passed
-    if (domainData.blocked && now - domainData.firstRequest >= this.config.cooldownPeriod) {
-      domainData.blocked = false;
-      domainData.count = 0;
-      domainData.firstRequest = now;
-    }
-
-    // Check hourly limit
-    if (this.globalRequests.length >= this.config.maxRequestsPerHour) {
-      throw new Error('Hourly request limit exceeded. Please wait before making more requests.');
-    }
-
-    // Check per-minute limit
-    const minuteRequests = this.globalRequests.filter(time => now - time < 60000);
-    if (minuteRequests.length >= this.config.maxRequestsPerMinute) {
-      domainData.blocked = true;
-      this.requests.set(domain, domainData);
-      throw new Error('Per-minute request limit exceeded. Cooling down...');
-    }
-
-    // Record request
-    this.globalRequests.push(now);
-    domainData.count++;
-    this.requests.set(domain, domainData);
-
-    // Add small delay between requests
-    const delay = Math.random() * 2000 + 1000; // 1-3 seconds
-    await new Promise(resolve => setTimeout(resolve, delay));
-  }
-}
-
-// Enhanced error handler
-class YouTubeErrorHandler {
-  constructor(config) {
-    this.config = config;
-    this.consecutiveErrors = 0;
-    this.lastErrorTime = 0;
-  }
-
-  isBotDetection(error) {
-    const errorMessage = error.message.toLowerCase();
-    return this.config.botDetectionPatterns.some(pattern => 
-      errorMessage.includes(pattern)
-    );
-  }
-
-  async handleError(error, attempt = 1) {
-    this.consecutiveErrors++;
-    this.lastErrorTime = Date.now();
-
-    if (this.isBotDetection(error)) {
-      const waitTime = Math.min(
-        this.config.delays.afterBotDetection.min * Math.pow(2, attempt - 1),
-        this.config.delays.afterBotDetection.max
-      );
-      
-      console.log(`Bot detection encountered. Waiting ${waitTime / 1000}s before retry...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      
-      return {
-        shouldRetry: attempt < 3,
-        waitTime,
-        errorType: 'bot_detection'
-      };
-    }
-
-    const waitTime = Math.min(
-      this.config.delays.beforeRetry.min * Math.pow(2, attempt - 1),
-      this.config.delays.beforeRetry.max
-    );
-
-    await new Promise(resolve => setTimeout(resolve, waitTime));
-
-    return {
-      shouldRetry: attempt < 5,
-      waitTime,
-      errorType: 'general'
-    };
-  }
-
-  reset() {
-    this.consecutiveErrors = 0;
-    this.lastErrorTime = 0;
-  }
-}
-
-// Helper functions
-function getRandomDelay(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function getRandomUserAgent() {
-  const agents = youtubeBotAvoidanceConfig.userAgents;
-  return agents[Math.floor(Math.random() * agents.length)];
-}
-
-function getRandomReferrer() {
-  const referrers = youtubeBotAvoidanceConfig.referrers;
-  return referrers[Math.floor(Math.random() * referrers.length)];
-}
-
-function buildHumanHeaders(userAgent = null, referrer = null) {
-  return {
-    ...youtubeBotAvoidanceConfig.humanHeaders,
-    'User-Agent': userAgent || getRandomUserAgent(),
-    'Referer': referrer || getRandomReferrer()
-  };
-}
-
 module.exports = {
-  youtubeBotAvoidanceConfig,
   RateLimiter,
   YouTubeErrorHandler,
-  getRandomDelay,
-  getRandomUserAgent,
-  getRandomReferrer,
-  buildHumanHeaders
+  ProxyRotator,
+  youtubeBotAvoidanceConfig
 };

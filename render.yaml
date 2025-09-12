@@ -1,34 +1,57 @@
+# render.yaml - Updated deployment configuration
 services:
   - type: web
     name: video-processing-service
     env: node
-    repo: https://github.com/Agbscholar/video-processor.git
-    buildCommand: npm install  # ← ONLY this line, remove the apt-get commands
-    startCommand: npm start
+    plan: starter  # Free tier
+    buildCommand: 
+      apt-get update && apt-get install -y \
+        python3 python3-pip \
+        ffmpeg \
+        curl \
+        wget
+      
+      pip3 install yt-dlp
+      
+      npm install --production
+    startCommand: "npm start"
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 10000
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: PROCESSING_SERVICE_TOKEN
-        generateValue: true
-      - key: N8N_CALLBACK_URL
-        value: https://n8n-on-render-wf30.onrender.com/webhook/processing-complete
+        value: "10000"
       - key: MAX_FILE_SIZE
-        value: 500MB
+        value: "524288000"  # 500MB
       - key: MAX_PROCESSING_TIME
-        value: 600000
-    disk:
-      name: video-processing-disk
-      mountPath: /tmp
-      sizeGB: 10
-    scaling:
-      minInstances: 1
-      maxInstances: 3
-      targetMemoryPercent: 80
-      targetCPUPercent: 70
+        value: "600000"     # 10 minutes
+      - key: SUPABASE_URL
+        sync: false  # Set manually in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: PROCESSING_SERVICE_TOKEN
+        sync: false  # Set manually
+      - key: N8N_WEBHOOK_SECRET
+        sync: false  # Set manually
+      - key: DEFAULT_CALLBACK_URL
+        sync: false  # Set manually
+    
+    # Health check endpoint
     healthCheckPath: /health
+    
+    # Scaling settings
+    autoDeploy: true
+    
+    # Environment settings
+    region: oregon  # Choose your preferred region
+    
+# Build settings
+build:
+  commands:
+    - echo "Installing system dependencies..."
+    - apt-get update
+    - apt-get install -y python3 python3-pip ffmpeg curl wget
+    - echo "Installing yt-dlp..."
+    - pip3 install -U yt-dlp
+    - echo "Installing Node.js dependencies..."
+    - npm ci --production
+    - echo "Build completed successfully"
