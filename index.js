@@ -1,4 +1,4 @@
-// index.js - Fixed server with proper Supabase configuration
+// index.js - Complete Fixed server with proper Supabase configuration
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -9,6 +9,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
 require('dotenv').config();
 
 // Import ENHANCED processors
@@ -27,21 +28,31 @@ try {
   console.log('YouTube bot avoidance loaded successfully');
 } catch (error) {
   console.warn('YouTube bot avoidance module not found, using basic rate limiting');
+  
   // Fallback rate limiter
   class FallbackRateLimiter {
-    async checkRateLimit() { return true; }
+    async checkRateLimit(url) { 
+      console.log(`Rate limit check for: ${url}`);
+      return true; 
+    }
   }
+  
   class FallbackErrorHandler {
-    async handleError(error) { throw error; }
-    reset() {}
+    async handleError(error, attempt) { 
+      console.log(`Error handler called for attempt ${attempt}:`, error.message);
+      throw error; 
+    }
+    reset() {
+      console.log('Error handler reset');
+    }
   }
+  
   RateLimiter = FallbackRateLimiter;
   YouTubeErrorHandler = FallbackErrorHandler;
   youtubeBotAvoidanceConfig = {
     rateLimiting: { cooldownPeriod: 60000 }
   };
 }
-
 
 const app = express();
 
@@ -53,9 +64,6 @@ const PORT = process.env.PORT || 10000;
 // Initialize YouTube components
 const youtubeRateLimiter = new RateLimiter(youtubeBotAvoidanceConfig);
 const youtubeErrorHandler = new YouTubeErrorHandler(youtubeBotAvoidanceConfig);
-
-
-
 
 // Middleware
 app.use(helmet());
@@ -276,9 +284,9 @@ app.post('/process', authenticateToken, async (req, res) => {
       }
     }
 
-const finalCallbackUrl = callback_url || 
-  (business_bot_url ? `${business_bot_url}/webhook/n8n-callback` : null) ||
-  process.env.DEFAULT_CALLBACK_URL;
+    const finalCallbackUrl = callback_url || 
+      (business_bot_url ? `${business_bot_url}/webhook/n8n-callback` : null) ||
+      process.env.DEFAULT_CALLBACK_URL;
 
     if (!finalCallbackUrl) {
       return res.status(400).json({
@@ -324,6 +332,84 @@ const finalCallbackUrl = callback_url ||
       start_time: startTime
     }).catch(error => {
       console.error(`[${processingId}] Background processing failed:`, error);
+    });
+
+  } catch (error) {
+    console.error(`[${processingId}] Processing request failed:`, error);
+    
+    res.status(500).json({
+      error: error.message,
+      processing_id: processingId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// FIXED: process-video endpoint with proper config
+app.post('/process-video', authenticateToken, async (req, res) => {
+  const startTime = Date.now();
+  let processingId = req.body.processing_id || uuidv4();
+  
+  console.log(`[${processingId}] Starting Supabase-optimized video processing`);
+  
+  try {
+    const {
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type = 'free',
+      callback_url
+    } = req.body;
+
+    // Input validation
+    if (!video_url || !callback_url) {
+      return res.status(400).json({
+        error: 'Missing required fields: video_url, callback_url',
+        processing_id: processingId
+      });
+    }
+
+    if (!telegram_id || !chat_id) {
+      return res.status(400).json({
+        error: 'Missing telegram identifiers: telegram_id, chat_id',
+        processing_id: processingId
+      });
+    }
+
+    // Enhanced YouTube rate limiting check
+    if (isYouTubeUrl(video_url)) {
+      try {
+        await youtubeRateLimiter.checkRateLimit('youtube.com');
+      } catch (rateLimitError) {
+        return res.status(429).json({
+          error: rateLimitError.message,
+          processing_id: processingId,
+          error_type: 'rate_limit'
+        });
+      }
+    }
+
+    // Immediate response
+    res.status(202).json({
+      status: 'accepted',
+      processing_id: processingId,
+      message: 'Video processing started with Supabase storage and enhanced YouTube support',
+      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
+      accepted_at: new Date().toISOString(),
+      storage_method: 'supabase-optimized'
+    });
+
+    // Start Supabase-optimized background processing
+    processWithSupabaseStorageEnhanced({
+      processing_id: processingId,
+      telegram_id,
+      chat_id,
+      video_url,
+      subscription_type,
+      callback_url,
+      start_time: startTime
+    }).catch(error => {
+      console.error(`[${processingId}] Supabase processing failed:`, error);
     });
 
   } catch (error) {
@@ -617,8 +703,6 @@ function detectPlatformFromUrl(url) {
 
 // Enhanced callback sender with better error handling
 async function sendCallback(callbackUrl, data, retries = 3) {
-  const axios = require('axios');
-  
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`[${data.processing_id}] Sending callback attempt ${attempt}/${retries} to: ${callbackUrl}`);
@@ -655,7 +739,7 @@ async function sendCallback(callbackUrl, data, retries = 3) {
   }
 }
 
-// Keep existing endpoints with minor improvements
+// Status check endpoint
 app.get('/status/:processing_id', authenticateToken, async (req, res) => {
   const { processing_id } = req.params;
   
@@ -674,6 +758,7 @@ app.get('/status/:processing_id', authenticateToken, async (req, res) => {
   }
 });
 
+// Upload and process endpoint
 app.post('/upload-and-process', authenticateToken, upload.single('video'), async (req, res) => {
   const processingId = uuidv4();
   
@@ -730,6 +815,7 @@ app.post('/upload-and-process', authenticateToken, upload.single('video'), async
   }
 });
 
+// Cleanup endpoint
 app.post('/cleanup', authenticateToken, async (req, res) => {
   try {
     const { older_than_hours = 24 } = req.body;
@@ -863,84 +949,3 @@ async function startServer() {
 }
 
 startServer();
-  }
-});
-
-// FIXED: process-video endpoint with proper config
-// FIXED: process-video endpoint with proper config
-app.post('/process-video', authenticateToken, async (req, res) => {
-  const startTime = Date.now();
-  let processingId = req.body.processing_id || uuidv4();
-  
-  console.log(`[${processingId}] Starting Supabase-optimized video processing`);
-  
-  try {
-    const {
-      telegram_id,
-      chat_id,
-      video_url,
-      subscription_type = 'free',
-      callback_url
-    } = req.body;
-
-    // Input validation
-    if (!video_url || !callback_url) {
-      return res.status(400).json({
-        error: 'Missing required fields: video_url, callback_url',
-        processing_id: processingId
-      });
-    }
-
-    if (!telegram_id || !chat_id) {
-      return res.status(400).json({
-        error: 'Missing telegram identifiers: telegram_id, chat_id',
-        processing_id: processingId
-      });
-    }
-
-    // Enhanced YouTube rate limiting check
-    if (isYouTubeUrl(video_url)) {
-      try {
-        await youtubeRateLimiter.checkRateLimit('youtube.com');
-      } catch (rateLimitError) {
-        return res.status(429).json({
-          error: rateLimitError.message,
-          processing_id: processingId,
-          error_type: 'rate_limit'
-        });
-      }
-    }
-
-    // Immediate response
-    res.status(202).json({
-      status: 'accepted',
-      processing_id: processingId,
-      message: 'Video processing started with Supabase storage and enhanced YouTube support',
-      estimated_completion_time: new Date(Date.now() + 300000).toISOString(),
-      accepted_at: new Date().toISOString(),
-      storage_method: 'supabase-optimized'
-    });
-
-    // Start Supabase-optimized background processing
-    processWithSupabaseStorageEnhanced({
-      processing_id: processingId,
-      telegram_id,
-      chat_id,
-      video_url,
-      subscription_type,
-      callback_url,
-      start_time: startTime
-    }).catch(error => {
-      console.error(`[${processingId}] Supabase processing failed:`, error);
-    });
-
-  } catch (error) {
-    console.error(`[${processingId}] Processing request failed:`, error);
-    
-    res.status(500).json({
-      error: error.message,
-      processing_id: processingId,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
