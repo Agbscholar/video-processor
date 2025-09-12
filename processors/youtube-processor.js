@@ -1,4 +1,4 @@
-// processors/youtube-processor.js - Complete Enhanced with comprehensive anti-detection and fallback methods
+// processors/youtube-processor.js - Enhanced with proper authentication and improved fallback methods
 const ytdl = require('ytdl-core');
 const youtubedl = require('youtube-dl-exec');
 const ffmpeg = require('fluent-ffmpeg');
@@ -17,32 +17,30 @@ class YouTubeProcessor {
     this.maxRetries = 5;
     this.retryDelay = 3000;
     
-    // Enhanced and more recent user agents
+    // Updated user agents for 2025
     this.userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
-      'Mozilla/5.0 (Android 14; Mobile; rv:123.0) Gecko/123.0 Firefox/123.0'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (Android 15; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0'
     ];
 
     // Enhanced rate limiting with exponential backoff
     this.lastRequestTime = 0;
-    this.minRequestInterval = 15000; // Increased from 8000
+    this.minRequestInterval = 12000;
     this.consecutiveFailures = 0;
-    this.maxConsecutiveFailures = 3; // Reduced from 4
+    this.maxConsecutiveFailures = 3;
     
-    // Session management for better anti-detection
+    // Session management
     this.sessionCookies = new Map();
     this.requestCount = 0;
     this.sessionStartTime = Date.now();
-    
-    // Proxy rotation capability
-    this.proxyList = [];
-    this.currentProxyIndex = 0;
+    this.identityToken = null;
+    this.sessionId = null;
     
     this.initializeTools();
   }
@@ -90,40 +88,38 @@ class YouTubeProcessor {
     return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
   }
 
-  generateRandomCookies() {
-    // Generate some random-looking cookies to appear more like a real browser
-    const sessionId = Math.random().toString(36).substring(2, 15);
-    const visitorId = Math.random().toString(36).substring(2, 15);
-    const clientId = Math.random().toString(36).substring(2, 15);
-    return `VISITOR_INFO1_LIVE=${visitorId}; YSC=${sessionId}; PREF=f1=50000000; CLIENT_ID=${clientId}`;
-  }
-
-  getNextProxy() {
-    if (this.proxyList.length === 0) return null;
-    
-    const proxy = this.proxyList[this.currentProxyIndex];
-    this.currentProxyIndex = (this.currentProxyIndex + 1) % this.proxyList.length;
-    return proxy;
+  // Remove cookie generation since it's causing authentication issues
+  async initializeSession() {
+    try {
+      const userAgent = this.getRandomUserAgent();
+      this.sessionId = Math.random().toString(36).substring(2, 15);
+      
+      // Initialize without cookies to avoid authentication issues
+      console.log('Session initialized without cookies to avoid authentication conflicts');
+      return true;
+    } catch (error) {
+      console.warn('Session initialization failed, proceeding without session:', error.message);
+      return false;
+    }
   }
 
   async enforceRateLimit() {
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
     
-    // More aggressive backoff strategy
     let waitTime = this.minRequestInterval;
     if (this.consecutiveFailures > 0) {
-      // Exponential backoff with higher base
-      waitTime = Math.min(300000, this.minRequestInterval * Math.pow(3, this.consecutiveFailures));
+      // More conservative backoff
+      waitTime = Math.min(180000, this.minRequestInterval * Math.pow(2.5, this.consecutiveFailures));
     }
     
     this.requestCount++;
-    if (this.requestCount > 5) {
-      waitTime += 20000; // Additional delay after multiple requests
+    if (this.requestCount > 3) {
+      waitTime += 15000; // Additional delay after multiple requests
     }
     
     // Add jitter to avoid synchronized requests
-    const jitter = Math.random() * 5000;
+    const jitter = Math.random() * 3000;
     waitTime += jitter;
     
     if (timeSinceLastRequest < waitTime) {
@@ -158,6 +154,7 @@ class YouTubeProcessor {
     
     try {
       await this.ensureDirectories();
+      await this.initializeSession();
       
       console.log(`[${processing_id}] Validating YouTube URL`);
       const videoId = this.extractVideoId(video_url);
@@ -270,21 +267,21 @@ class YouTubeProcessor {
 
     const methods = [];
     
-    // Prioritize less detectable methods first
-    methods.push(() => this.getVideoInfoViaAPI(videoUrl, processingId));
+    // Prioritize methods that don't require authentication tokens
+    methods.push(() => this.getVideoInfoViaOEmbed(videoUrl, processingId));
     
     if (this.availableTools.ytDlp) {
-      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'mobile'));
-      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'embedded'));
-      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'standard'));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'android'));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'web_embedded'));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'web_creator'));
     }
     
     if (this.availableTools.youtubeDl) {
       methods.push(() => this.getVideoInfoWithYoutubeDl(videoUrl, processingId));
     }
     
-    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId, 'embedded'));
-    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId, 'default'));
+    // ytdl-core without cookies
+    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId, 'no_auth'));
     methods.push(() => this.getVideoInfoFallbackMethod(videoUrl, processingId));
 
     let lastError;
@@ -303,10 +300,10 @@ class YouTubeProcessor {
         if (this.isBotDetectionError(error) || this.isRateLimitError(error)) {
           console.log(`[${processingId}] Detected bot blocking/rate limiting, increasing backoff`);
           this.consecutiveFailures++;
-          const backoffTime = Math.min(120000, 20000 * Math.pow(2, this.consecutiveFailures));
+          const backoffTime = Math.min(300000, 30000 * Math.pow(2, this.consecutiveFailures));
           await this.sleep(backoffTime);
         } else if (index < methods.length - 1) {
-          await this.sleep(3000 + Math.random() * 4000);
+          await this.sleep(2000 + Math.random() * 3000);
         }
       }
     }
@@ -314,7 +311,7 @@ class YouTubeProcessor {
     throw new Error(`All video info methods failed: ${lastError.message}`);
   }
 
-  async getVideoInfoWithYtDlp(videoUrl, processingId, mode = 'standard') {
+  async getVideoInfoWithYtDlp(videoUrl, processingId, client = 'web') {
     const userAgent = this.getRandomUserAgent();
     let baseOptions = [
       '--dump-json',
@@ -322,19 +319,20 @@ class YouTubeProcessor {
       '--no-call-home',
       '--no-check-certificate',
       '--prefer-free-formats',
-      '--user-agent', userAgent,
-      '--referer', 'https://www.google.com/',
-      '--add-header', `Cookie:${this.generateRandomCookies()}`
+      '--user-agent', userAgent
     ];
 
-    switch (mode) {
-      case 'embedded':
-        baseOptions.push('--extractor-args', 'youtube:player_client=web_embedded');
-        break;
-      case 'mobile':
+    // Use different client modes without problematic cookie headers
+    switch (client) {
+      case 'android':
         baseOptions.push('--extractor-args', 'youtube:player_client=android');
         break;
-      case 'standard':
+      case 'web_embedded':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_embedded');
+        break;
+      case 'web_creator':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_creator');
+        break;
       default:
         baseOptions.push('--extractor-args', 'youtube:player_client=web');
         break;
@@ -348,12 +346,12 @@ class YouTubeProcessor {
       try {
         return await this.executeYtDlpCommand(cmd, baseOptions, processingId);
       } catch (error) {
-        console.warn(`Command ${cmd} (${mode}) failed:`, error.message);
+        console.warn(`Command ${cmd} (${client}) failed:`, error.message);
         continue;
       }
     }
     
-    throw new Error(`yt-dlp (${mode}) not available or failed`);
+    throw new Error(`yt-dlp (${client}) not available or failed`);
   }
 
   async executeYtDlpCommand(baseCmd, options, processingId) {
@@ -401,7 +399,7 @@ class YouTubeProcessor {
       setTimeout(() => {
         process.kill('SIGKILL');
         reject(new Error('Video info request timeout'));
-      }, 60000); // Increased timeout
+      }, 45000);
     });
   }
 
@@ -439,13 +437,13 @@ class YouTubeProcessor {
           headers: {
             'User-Agent': this.getRandomUserAgent(),
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'Cookie': this.generateRandomCookies(),
+            'Accept-Encoding': 'gzip, deflate'
           }
         }
       };
 
-      if (mode === 'embedded') {
+      // Remove cookie-related headers to avoid authentication issues
+      if (mode === 'no_auth') {
         options.requestOptions.headers['Referer'] = 'https://www.youtube.com/';
         options.requestOptions.headers['Origin'] = 'https://www.youtube.com';
       }
@@ -470,21 +468,20 @@ class YouTubeProcessor {
     }
   }
 
-  async getVideoInfoViaAPI(videoUrl, processingId) {
+  async getVideoInfoViaOEmbed(videoUrl, processingId) {
     const videoId = this.extractVideoId(videoUrl);
     if (!videoId) {
-      throw new Error('Cannot extract video ID for API method');
+      throw new Error('Cannot extract video ID for oEmbed method');
     }
 
     try {
       const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
       
       const response = await axios.get(oembedUrl, {
-        timeout: 20000,
+        timeout: 15000,
         headers: {
           'User-Agent': this.getRandomUserAgent(),
           'Accept': 'application/json',
-          'Referer': 'https://www.google.com/',
           'Accept-Language': 'en-US,en;q=0.9'
         }
       });
@@ -493,7 +490,7 @@ class YouTubeProcessor {
       
       return {
         title: data.title || 'Unknown Title',
-        description: 'Retrieved via API fallback method',
+        description: 'Retrieved via oEmbed API',
         author: data.author_name || 'Unknown',
         duration: 0,
         view_count: 0,
@@ -504,7 +501,7 @@ class YouTubeProcessor {
         category: 'Unknown'
       };
     } catch (error) {
-      throw new Error(`API fallback method failed: ${error.message}`);
+      throw new Error(`oEmbed API method failed: ${error.message}`);
     }
   }
 
@@ -531,23 +528,21 @@ class YouTubeProcessor {
   async downloadVideoWithImprovedFallbacks(videoUrl, processingId) {
     const methods = [];
     
-    // Prioritize methods that are less likely to trigger detection
-    methods.push(() => this.downloadWithAlternativeStream(videoUrl, processingId));
-    
+    // Prioritize methods that work without authentication
     if (this.availableTools.ytDlp) {
-      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'mobile'));
-      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'embedded'));
-      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'fallback'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'android'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'web_embedded'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'web_creator'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'ios'));
     }
     
     if (this.availableTools.youtubeDl) {
       methods.push(() => this.downloadWithYoutubeDl(videoUrl, processingId));
     }
     
-    // Enhanced ytdl-core methods
-    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'mobile'));
-    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'fallback'));
-    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'default'));
+    // ytdl-core without authentication
+    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'no_auth'));
+    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'minimal'));
 
     let lastError;
     
@@ -569,20 +564,19 @@ class YouTubeProcessor {
         if (this.isBotDetectionError(error) || this.isRateLimitError(error)) {
           this.consecutiveFailures++;
           
-          // More aggressive backoff for bot detection
           let backoffTime;
           if (this.consecutiveFailures === 1) {
-            backoffTime = 60000; // 1 minute
+            backoffTime = 90000; // 1.5 minutes
           } else if (this.consecutiveFailures === 2) {
-            backoffTime = 180000; // 3 minutes
-          } else {
             backoffTime = 300000; // 5 minutes
+          } else {
+            backoffTime = 600000; // 10 minutes
           }
           
           console.log(`[${processingId}] Bot/rate limit detected, backing off for ${Math.round(backoffTime/1000)}s`);
           await this.sleep(backoffTime);
         } else if (index < methods.length - 1) {
-          await this.sleep(5000 + Math.random() * 5000);
+          await this.sleep(3000 + Math.random() * 5000);
         }
       }
     }
@@ -590,113 +584,7 @@ class YouTubeProcessor {
     throw new Error(`All download methods failed. Last error: ${lastError.message}`);
   }
 
-  async downloadWithAlternativeStream(videoUrl, processingId) {
-    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
-    
-    try {
-      console.log(`[${processingId}] Trying alternative stream download`);
-      
-      const videoId = this.extractVideoId(videoUrl);
-      if (!videoId) {
-        throw new Error('Cannot extract video ID');
-      }
-
-      // Try to get direct video URL using embed page
-      const directUrl = await this.getDirectVideoUrl(videoId);
-      if (!directUrl) {
-        throw new Error('Could not get direct video URL');
-      }
-
-      return await this.downloadDirectStream(directUrl, outputPath, processingId);
-      
-    } catch (error) {
-      throw new Error(`Alternative stream download failed: ${error.message}`);
-    }
-  }
-
-  async getDirectVideoUrl(videoId) {
-    try {
-      const embedUrl = `https://www.youtube.com/embed/${videoId}`;
-      
-      const response = await axios.get(embedUrl, {
-        headers: {
-          'User-Agent': this.getRandomUserAgent(),
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate',
-          'Referer': 'https://www.google.com/',
-        },
-        timeout: 30000
-      });
-
-      const html = response.data;
-      
-      // Try to extract video URLs from various sources in the embed page
-      const urlPatterns = [
-        /"url":"([^"]*videoplayback[^"]*)"/g,
-        /"signatureCipher":"([^"]*)"/g,
-        /"cipher":"([^"]*)"/g
-      ];
-      
-      for (const pattern of urlPatterns) {
-        const matches = [...html.matchAll(pattern)];
-        if (matches.length > 0) {
-          const url = matches[0][1].replace(/\\u0026/g, '&');
-          return decodeURIComponent(url);
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Failed to get direct video URL:', error);
-      return null;
-    }
-  }
-
-  async downloadDirectStream(directUrl, outputPath, processingId) {
-    return new Promise((resolve, reject) => {
-      const writer = fsSync.createWriteStream(outputPath);
-      
-      axios({
-        method: 'GET',
-        url: directUrl,
-        responseType: 'stream',
-        headers: {
-          'User-Agent': this.getRandomUserAgent(),
-          'Referer': 'https://www.youtube.com/',
-          'Accept-Ranges': 'bytes',
-        },
-        timeout: 300000 // 5 minutes
-      }).then(response => {
-        response.data.pipe(writer);
-        
-        let downloaded = 0;
-        const contentLength = parseInt(response.headers['content-length']) || 0;
-        
-        response.data.on('data', (chunk) => {
-          downloaded += chunk.length;
-          if (contentLength > 0 && downloaded % (5 * 1024 * 1024) === 0) { // Every 5MB
-            const percent = (downloaded / contentLength * 100).toFixed(1);
-            console.log(`[${processingId}] Alternative download: ${percent}% (${Math.round(downloaded / 1024 / 1024)}MB)`);
-          }
-        });
-        
-        writer.on('finish', () => {
-          console.log(`[${processingId}] Alternative stream download completed`);
-          resolve(outputPath);
-        });
-        
-        writer.on('error', (error) => {
-          reject(new Error(`Write stream error: ${error.message}`));
-        });
-        
-      }).catch(error => {
-        reject(new Error(`Download request failed: ${error.message}`));
-      });
-    });
-  }
-
-  async downloadWithYtDlp(videoUrl, processingId, mode = 'standard') {
+  async downloadWithYtDlp(videoUrl, processingId, client = 'android') {
     const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
     const userAgent = this.getRandomUserAgent();
     
@@ -706,27 +594,26 @@ class YouTubeProcessor {
       '--merge-output-format', 'mp4',
       '--no-warnings',
       '--user-agent', userAgent,
-      '--referer', 'https://www.youtube.com/',
-      '--add-header', `Cookie:${this.generateRandomCookies()}`,
-      '--retries', '2',
-      '--fragment-retries', '2',
-      '--limit-rate', '1M',
-      '--throttled-rate', '200K'
+      '--retries', '1',
+      '--fragment-retries', '1',
+      '--limit-rate', '2M'
     ];
 
-    switch (mode) {
-      case 'embedded':
+    // Use different client modes for better compatibility
+    switch (client) {
+      case 'android':
+        baseOptions.push('--extractor-args', 'youtube:player_client=android');
+        break;
+      case 'web_embedded':
         baseOptions.push('--extractor-args', 'youtube:player_client=web_embedded');
         break;
-      case 'mobile':
-        baseOptions.push('--extractor-args', 'youtube:player_client=android');
+      case 'web_creator':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_creator');
+        break;
+      case 'ios':
+        baseOptions.push('--extractor-args', 'youtube:player_client=ios');
         baseOptions.push('--format', 'best[height<=480]/best');
         break;
-      case 'fallback':
-        baseOptions.push('--extractor-args', 'youtube:player_client=web_creator');
-        baseOptions.push('--format', 'worst[ext=mp4]/worst');
-        break;
-      case 'standard':
       default:
         baseOptions.push('--extractor-args', 'youtube:player_client=web');
         break;
@@ -738,14 +625,14 @@ class YouTubeProcessor {
     
     for (const cmd of commands) {
       try {
-        return await this.executeDownloadCommand(cmd, baseOptions, processingId, mode);
+        return await this.executeDownloadCommand(cmd, baseOptions, processingId, client);
       } catch (error) {
-        console.warn(`Download with ${cmd} (${mode}) failed:`, error.message);
+        console.warn(`Download with ${cmd} (${client}) failed:`, error.message);
         continue;
       }
     }
     
-    throw new Error(`yt-dlp download (${mode}) failed`);
+    throw new Error(`yt-dlp download (${client}) failed`);
   }
 
   async executeDownloadCommand(baseCmd, options, processingId, mode) {
@@ -790,7 +677,7 @@ class YouTubeProcessor {
       setTimeout(() => {
         process.kill('SIGKILL');
         reject(new Error('Download timeout'));
-      }, 900000);
+      }, 600000); // 10 minutes timeout
     });
   }
 
@@ -802,8 +689,7 @@ class YouTubeProcessor {
         output: outputTemplate,
         format: 'best[height<=720]',
         mergeOutputFormat: 'mp4',
-        userAgent: this.getRandomUserAgent(),
-        referer: 'https://www.youtube.com/'
+        userAgent: this.getRandomUserAgent()
       });
       
       const files = await fs.readdir(this.tempDir);
@@ -819,30 +705,27 @@ class YouTubeProcessor {
     }
   }
 
-  async downloadWithYtdlCore(videoUrl, processingId, mode = 'default') {
+  async downloadWithYtdlCore(videoUrl, processingId, mode = 'no_auth') {
     const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
     
     return new Promise((resolve, reject) => {
       try {
         const options = {
-          quality: mode === 'fallback' ? 'lowest' : 'highestvideo',
+          quality: mode === 'minimal' ? 'lowest' : 'highestvideo',
           filter: 'audioandvideo',
           requestOptions: {
             headers: {
               'User-Agent': this.getRandomUserAgent(),
-              'Accept-Language': 'en-US,en;q=0.9',
-              'Referer': 'https://www.youtube.com/',
-              'Origin': 'https://www.youtube.com',
-              'Cookie': this.generateRandomCookies(),
+              'Accept-Language': 'en-US,en;q=0.9'
             },
-            timeout: 60000,
+            timeout: 45000,
           }
         };
 
-        // Try different quality options based on mode
-        if (mode === 'mobile') {
-          options.quality = 'highestvideo[height<=480]';
-        } else if (mode === 'fallback') {
+        // Remove authentication-related headers
+        if (mode === 'no_auth') {
+          options.requestOptions.headers['Referer'] = 'https://www.youtube.com/';
+        } else if (mode === 'minimal') {
           options.quality = 'lowestvideo';
           options.filter = 'video';
         }
@@ -907,7 +790,9 @@ class YouTubeProcessor {
            errorMsg.includes('quota exceeded') ||
            errorMsg.includes('this video is not available') ||
            errorMsg.includes('private video') ||
-           errorMsg.includes('unavailable');
+           errorMsg.includes('unavailable') ||
+           errorMsg.includes('identity token') ||
+           errorMsg.includes('cookie header');
   }
 
   isRateLimitError(error) {
@@ -916,7 +801,8 @@ class YouTubeProcessor {
            errorMsg.includes('429') ||
            errorMsg.includes('rate limit') ||
            errorMsg.includes('too many requests') ||
-           errorMsg.includes('quota');
+           errorMsg.includes('quota') ||
+           errorMsg.includes('identity token');
   }
 
   async validateDownloadedFile(filePath, processingId) {
@@ -1322,8 +1208,8 @@ class YouTubeProcessor {
   enhanceError(error, processingId, videoUrl) {
     const message = error.message.toLowerCase();
     
-    if (message.includes('410') || message.includes('bot') || message.includes('sign in to confirm')) {
-      return new Error('YouTube has temporarily blocked access to this video due to automated detection. This usually resolves within 1-2 hours. Please try again later or try a different video.');
+    if (message.includes('410') || message.includes('bot') || message.includes('sign in to confirm') || message.includes('identity token')) {
+      return new Error('YouTube has temporarily blocked access due to automated detection. This usually resolves within 1-2 hours. Please try again later or try a different video.');
     } else if (message.includes('video unavailable') || message.includes('private')) {
       return new Error('This YouTube video is private, unavailable, or has been deleted. Please verify the URL and try a different video.');
     } else if (message.includes('age-restricted') || message.includes('age_restricted')) {
