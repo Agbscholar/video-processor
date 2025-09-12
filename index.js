@@ -218,7 +218,7 @@ app.get('/health', async (req, res) => {
       },
       config: {
         supabase_url: 'https://qwqvdvhvcroggxndniom.supabase.co' ? 'configured' : 'missing',
-        supabase_key: process.env.'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF3cXZkdmh2Y3JvZ2d4bmRuaW9tIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjQxMTc1MCwiZXhwIjoyMDcxOTg3NzUwfQ.8PLytgLvYwaHjOJzw2Hq2yOkGJmxEX8im6wM5HQxlF4' ? 'configured' : 'missing'
+        supabase_key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF3cXZkdmh2Y3JvZ2d4bmRuaW9tIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjQxMTc1MCwiZXhwIjoyMDcxOTg3NzUwfQ.8PLytgLvYwaHjOJzw2Hq2yOkGJmxEX8im6wM5HQxlF4' ? 'configured' : 'missing'
       }
     });
   } catch (error) {
