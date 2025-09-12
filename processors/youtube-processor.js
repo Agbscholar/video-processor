@@ -509,8 +509,13 @@ class YouTubeProcessor {
       methods.push(() => this.downloadWithYoutubeDl(videoUrl, processingId));
     }
     
+    // Enhanced ytdl-core methods
     methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'default'));
+    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'mobile'));
     methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'fallback'));
+    
+    // Add the new alternative stream method
+    methods.push(() => this.downloadWithAlternativeStream(videoUrl, processingId));
 
     let lastError;
     
@@ -535,7 +540,7 @@ class YouTubeProcessor {
           console.log(`[${processingId}] Bot detection/rate limit, backing off for ${backoffTime}ms`);
           await this.sleep(backoffTime);
         } else if (index < methods.length - 1) {
-          await this.sleep(5000 + Math.random() * 5000);
+          await this.sleep(3000 + Math.random() * 3000);
         }
       }
     }
