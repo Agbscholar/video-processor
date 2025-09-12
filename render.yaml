@@ -1,20 +1,40 @@
-# render.yaml - Updated deployment configuration
+# render.yaml - Fixed deployment configuration with proper yt-dlp installation
 services:
   - type: web
     name: video-processing-service
     env: node
-    plan: starter  # Free tier
-    buildCommand: 
+    plan: starter
+    buildCommand: |
+      # Update system packages
       apt-get update && apt-get install -y \
-        python3 python3-pip \
+        python3 \
+        python3-pip \
+        python3-venv \
         ffmpeg \
         curl \
-        wget
+        wget \
+        software-properties-common \
+        ca-certificates \
+        gnupg \
+        lsb-release
       
-      pip3 install yt-dlp
+      # Install yt-dlp properly with all dependencies
+      python3 -m pip install --upgrade pip
+      python3 -m pip install --upgrade yt-dlp
       
-      npm install --production
+      # Create symlink to ensure yt-dlp is in PATH
+      ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp || true
+      
+      # Verify installation
+      yt-dlp --version || python3 -m yt_dlp --version
+      
+      # Install Node.js dependencies
+      npm ci --only=production
+      
+      echo "Build completed successfully"
+      
     startCommand: "npm start"
+    
     envVars:
       - key: NODE_ENV
         value: production
@@ -25,33 +45,22 @@ services:
       - key: MAX_PROCESSING_TIME
         value: "600000"     # 10 minutes
       - key: SUPABASE_URL
-        sync: false  # Set manually in Render dashboard
+        sync: false  # Set in dashboard: https://qwqvdvhvcroggxndniom.supabase.co
       - key: SUPABASE_SERVICE_KEY
-        sync: false  # Set manually in Render dashboard
+        sync: false  # Set in dashboard: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       - key: PROCESSING_SERVICE_TOKEN
-        sync: false  # Set manually
+        sync: false  # Generate a secure token
       - key: N8N_WEBHOOK_SECRET
-        sync: false  # Set manually
+        sync: false  # Your n8n webhook secret
       - key: DEFAULT_CALLBACK_URL
-        sync: false  # Set manually
+        sync: false  # Your default callback URL
     
-    # Health check endpoint
     healthCheckPath: /health
-    
-    # Scaling settings
     autoDeploy: true
+    region: oregon
     
-    # Environment settings
-    region: oregon  # Choose your preferred region
-    
-# Build settings
-build:
-  commands:
-    - echo "Installing system dependencies..."
-    - apt-get update
-    - apt-get install -y python3 python3-pip ffmpeg curl wget
-    - echo "Installing yt-dlp..."
-    - pip3 install -U yt-dlp
-    - echo "Installing Node.js dependencies..."
-    - npm ci --production
-    - echo "Build completed successfully"
+    # Resource allocation for free tier
+    disk: 
+      name: video-temp
+      mountPath: /tmp
+      sizeGB: 1
