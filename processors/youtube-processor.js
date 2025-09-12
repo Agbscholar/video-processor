@@ -1,4 +1,4 @@
-// processors/youtube-processor.js - Improved with better fallback methods
+// processors/youtube-processor.js - Enhanced with comprehensive anti-detection and fallback methods
 const ytdl = require('ytdl-core');
 const youtubedl = require('youtube-dl-exec');
 const ffmpeg = require('fluent-ffmpeg');
@@ -14,22 +14,32 @@ class YouTubeProcessor {
   constructor() {
     this.tempDir = '/tmp/processing';
     this.outputDir = '/tmp/output';
-    this.maxRetries = 3;
-    this.retryDelay = 2000;
+    this.maxRetries = 5;
+    this.retryDelay = 3000;
     
-    // Updated user agents (recent versions)
+    // Enhanced and more recent user agents
     this.userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (Android 14; Mobile; rv:123.0) Gecko/123.0 Firefox/123.0'
     ];
 
-    // Rate limiting state
+    // Enhanced rate limiting with exponential backoff
     this.lastRequestTime = 0;
-    this.minRequestInterval = 5000;
+    this.minRequestInterval = 8000;
     this.consecutiveFailures = 0;
+    this.maxConsecutiveFailures = 4;
     
-    // Check available tools on initialization
+    // Session management for better anti-detection
+    this.sessionCookies = new Map();
+    this.requestCount = 0;
+    this.sessionStartTime = Date.now();
+    
     this.initializeTools();
   }
 
@@ -37,7 +47,7 @@ class YouTubeProcessor {
     this.availableTools = {
       ytDlp: await this.checkYtDlp(),
       youtubeDl: await this.checkYoutubeDl(),
-      ytdlCore: true // Always available via npm
+      ytdlCore: true
     };
     
     console.log('Available YouTube tools:', this.availableTools);
@@ -45,12 +55,15 @@ class YouTubeProcessor {
 
   async checkYtDlp() {
     return new Promise((resolve) => {
-      exec('yt-dlp --version', (error) => {
-        if (!error) {
+      exec('yt-dlp --version', (error, stdout) => {
+        if (!error && stdout) {
+          console.log('yt-dlp version:', stdout.trim());
           resolve(true);
         } else {
-          // Try alternative paths
-          exec('python3 -m yt_dlp --version', (error2) => {
+          exec('python3 -m yt_dlp --version', (error2, stdout2) => {
+            if (!error2 && stdout2) {
+              console.log('yt-dlp (python) version:', stdout2.trim());
+            }
             resolve(!error2);
           });
         }
@@ -60,7 +73,10 @@ class YouTubeProcessor {
 
   async checkYoutubeDl() {
     return new Promise((resolve) => {
-      exec('youtube-dl --version', (error) => {
+      exec('youtube-dl --version', (error, stdout) => {
+        if (!error && stdout) {
+          console.log('youtube-dl version:', stdout.trim());
+        }
         resolve(!error);
       });
     });
@@ -76,12 +92,17 @@ class YouTubeProcessor {
     
     let waitTime = this.minRequestInterval;
     if (this.consecutiveFailures > 0) {
-      waitTime = Math.min(60000, this.minRequestInterval * Math.pow(2, this.consecutiveFailures));
+      waitTime = Math.min(120000, this.minRequestInterval * Math.pow(2, this.consecutiveFailures));
+    }
+    
+    this.requestCount++;
+    if (this.requestCount > 10) {
+      waitTime += 15000;
     }
     
     if (timeSinceLastRequest < waitTime) {
       const sleepTime = waitTime - timeSinceLastRequest;
-      console.log(`Rate limiting: waiting ${sleepTime}ms (failures: ${this.consecutiveFailures})`);
+      console.log(`Rate limiting: waiting ${sleepTime}ms (failures: ${this.consecutiveFailures}, requests: ${this.requestCount})`);
       await this.sleep(sleepTime);
     }
     
@@ -98,14 +119,12 @@ class YouTubeProcessor {
       user_limits = { max_shorts: 3 }
     } = data;
     
-    console.log(`[${processing_id}] Starting YouTube video processing`);
+    console.log(`[${processing_id}] Starting enhanced YouTube video processing`);
     
-    // Validate Supabase config
     if (!supabase_config?.url || !supabase_config?.service_key) {
       throw new Error('Missing Supabase configuration (url or service_key)');
     }
     
-    // Initialize Supabase client
     const supabase = createClient(supabase_config.url, supabase_config.service_key);
     
     let originalVideoPath = null;
@@ -122,25 +141,19 @@ class YouTubeProcessor {
       
       console.log(`[${processing_id}] Extracted video ID: ${videoId}`);
       
-      // Get video info with improved fallback
-      console.log(`[${processing_id}] Fetching video information with enhanced fallback`);
+      console.log(`[${processing_id}] Fetching video information with enhanced fallback system`);
       const videoDetails = await this.getVideoInfoWithImprovedFallback(video_url, processing_id);
       
-      // Download video with improved methods
-      console.log(`[${processing_id}] Downloading video with multiple methods`);
+      console.log(`[${processing_id}] Downloading video with comprehensive fallback methods`);
       originalVideoPath = await this.downloadVideoWithImprovedFallbacks(video_url, processing_id);
       
-      // Validate downloaded file
       await this.validateDownloadedFile(originalVideoPath, processing_id);
       
-      // Get video metadata
       const metadata = await this.getVideoMetadata(originalVideoPath);
-      console.log(`[${processing_id}] Video duration: ${metadata.duration}s, resolution: ${metadata.width}x${metadata.height}`);
+      console.log(`[${processing_id}] Video metadata: ${metadata.duration}s, ${metadata.width}x${metadata.height}, ${metadata.size_mb}MB`);
       
-      // Validate video for processing
       this.validateVideoForProcessing(metadata, subscription_type);
       
-      // Create shorts segments
       console.log(`[${processing_id}] Creating video shorts`);
       const shorts = await this.createShorts(originalVideoPath, {
         processing_id,
@@ -150,15 +163,12 @@ class YouTubeProcessor {
         video_info: { ...video_info, ...videoDetails }
       });
       
-      // Generate thumbnails
       console.log(`[${processing_id}] Generating thumbnails`);
       const shortsWithThumbnails = await this.generateThumbnails(shorts, processing_id);
       
-      // Upload to Supabase Storage
       console.log(`[${processing_id}] Uploading to cloud storage`);
       const uploadedShorts = await this.uploadToStorage(shortsWithThumbnails, supabase, processing_id);
       
-      // Save to database
       await this.saveToDatabase(supabase, {
         processing_id,
         video_info: { ...video_info, ...videoDetails },
@@ -167,7 +177,6 @@ class YouTubeProcessor {
         metadata
       });
       
-      // Cleanup
       await this.cleanup(processing_id);
       
       this.consecutiveFailures = 0;
@@ -193,7 +202,7 @@ class YouTubeProcessor {
       };
       
     } catch (error) {
-      console.error(`[${processing_id}] YouTube processing failed:`, error);
+      console.error(`[${processing_id}] Enhanced YouTube processing failed:`, error);
       this.consecutiveFailures++;
       
       if (originalVideoPath) {
@@ -235,37 +244,41 @@ class YouTubeProcessor {
 
     const methods = [];
     
-    // Add methods based on available tools
     if (this.availableTools.ytDlp) {
-      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'standard'));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'embedded'));
+      methods.push(() => this.getVideoInfoWithYtDlp(videoUrl, processingId, 'mobile'));
     }
     
     if (this.availableTools.youtubeDl) {
       methods.push(() => this.getVideoInfoWithYoutubeDl(videoUrl, processingId));
     }
     
-    // Always add ytdl-core as fallback
-    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId));
+    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId, 'default'));
+    methods.push(() => this.getVideoInfoWithYtdlCore(videoUrl, processingId, 'embedded'));
+    methods.push(() => this.getVideoInfoViaAPI(videoUrl, processingId));
     methods.push(() => this.getVideoInfoFallbackMethod(videoUrl, processingId));
 
     let lastError;
     
     for (const [index, method] of methods.entries()) {
       try {
-        console.log(`[${processingId}] Trying video info method ${index + 1}`);
+        console.log(`[${processingId}] Trying video info method ${index + 1}/${methods.length}`);
         const result = await method();
         console.log(`[${processingId}] Video info method ${index + 1} succeeded`);
+        this.consecutiveFailures = 0;
         return result;
       } catch (error) {
         lastError = error;
         console.warn(`[${processingId}] Video info method ${index + 1} failed: ${error.message}`);
         
-        if (this.isBotDetectionError(error)) {
-          console.log(`[${processingId}] Bot detection suspected, applying backoff`);
+        if (this.isBotDetectionError(error) || this.isRateLimitError(error)) {
+          console.log(`[${processingId}] Detected bot blocking/rate limiting, increasing backoff`);
           this.consecutiveFailures++;
-          await this.sleep(Math.min(30000, 5000 * Math.pow(2, this.consecutiveFailures)));
+          const backoffTime = Math.min(60000, 10000 * Math.pow(2, this.consecutiveFailures));
+          await this.sleep(backoffTime);
         } else if (index < methods.length - 1) {
-          await this.sleep(3000);
+          await this.sleep(2000 + Math.random() * 3000);
         }
       }
     }
@@ -273,39 +286,50 @@ class YouTubeProcessor {
     throw new Error(`All video info methods failed: ${lastError.message}`);
   }
 
-  async getVideoInfoWithYtDlp(videoUrl, processingId) {
+  async getVideoInfoWithYtDlp(videoUrl, processingId, mode = 'standard') {
     const userAgent = this.getRandomUserAgent();
-    
-    // Try yt-dlp first, then python module
-    const commands = ['yt-dlp', 'python3 -m yt_dlp'];
-    
-    for (const cmd of commands) {
-      try {
-        return await this.executeYtDlpCommand(cmd, videoUrl, userAgent, processingId);
-      } catch (error) {
-        console.warn(`Command ${cmd} failed:`, error.message);
-        continue;
-      }
-    }
-    
-    throw new Error('yt-dlp not available or failed');
-  }
-
-  async executeYtDlpCommand(baseCmd, videoUrl, userAgent, processingId) {
-    const options = [
+    let baseOptions = [
       '--dump-json',
       '--no-warnings',
       '--no-call-home',
       '--no-check-certificate',
       '--prefer-free-formats',
       '--user-agent', userAgent,
-      '--referer', 'https://www.google.com/',
-      '--format', 'best[height<=720]/best',
-      videoUrl
+      '--referer', 'https://www.google.com/'
     ];
 
+    switch (mode) {
+      case 'embedded':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_embedded');
+        break;
+      case 'mobile':
+        baseOptions.push('--extractor-args', 'youtube:player_client=android');
+        break;
+      case 'standard':
+      default:
+        baseOptions.push('--extractor-args', 'youtube:player_client=web');
+        break;
+    }
+
+    baseOptions.push(videoUrl);
+    
+    const commands = ['yt-dlp', 'python3 -m yt_dlp'];
+    
+    for (const cmd of commands) {
+      try {
+        return await this.executeYtDlpCommand(cmd, baseOptions, processingId);
+      } catch (error) {
+        console.warn(`Command ${cmd} (${mode}) failed:`, error.message);
+        continue;
+      }
+    }
+    
+    throw new Error(`yt-dlp (${mode}) not available or failed`);
+  }
+
+  async executeYtDlpCommand(baseCmd, options, processingId) {
     const fullCommand = baseCmd === 'yt-dlp' ? [baseCmd, ...options] : 
-                       ['python3', '-m', 'yt_dlp', ...options.slice(0)];
+                       ['python3', '-m', 'yt_dlp', ...options];
 
     return new Promise((resolve, reject) => {
       const process = spawn(fullCommand[0], fullCommand.slice(1));
@@ -346,9 +370,9 @@ class YouTubeProcessor {
       });
 
       setTimeout(() => {
-        process.kill();
+        process.kill('SIGKILL');
         reject(new Error('Video info request timeout'));
-      }, 30000);
+      }, 45000);
     });
   }
 
@@ -378,9 +402,23 @@ class YouTubeProcessor {
     }
   }
 
-  async getVideoInfoWithYtdlCore(videoUrl, processingId) {
+  async getVideoInfoWithYtdlCore(videoUrl, processingId, mode = 'default') {
     try {
-      const info = await ytdl.getInfo(videoUrl);
+      const options = {
+        requestOptions: {
+          headers: {
+            'User-Agent': this.getRandomUserAgent(),
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+          }
+        }
+      };
+
+      if (mode === 'embedded') {
+        options.requestOptions.headers['Referer'] = 'https://www.youtube.com/';
+      }
+
+      const info = await ytdl.getInfo(videoUrl, options);
       const details = info.videoDetails;
       
       return {
@@ -396,7 +434,44 @@ class YouTubeProcessor {
         category: details.category || 'Unknown'
       };
     } catch (error) {
-      throw new Error(`ytdl-core failed: ${error.message}`);
+      throw new Error(`ytdl-core (${mode}) failed: ${error.message}`);
+    }
+  }
+
+  async getVideoInfoViaAPI(videoUrl, processingId) {
+    const videoId = this.extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error('Cannot extract video ID for API method');
+    }
+
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+      
+      const response = await axios.get(oembedUrl, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': this.getRandomUserAgent(),
+          'Accept': 'application/json',
+          'Referer': 'https://www.google.com/'
+        }
+      });
+
+      const data = response.data;
+      
+      return {
+        title: data.title || 'Unknown Title',
+        description: 'Retrieved via API fallback method',
+        author: data.author_name || 'Unknown',
+        duration: 0,
+        view_count: 0,
+        upload_date: new Date().toISOString().substring(0, 10).replace(/-/g, ''),
+        video_id: videoId,
+        thumbnail: data.thumbnail_url,
+        is_live: false,
+        category: 'Unknown'
+      };
+    } catch (error) {
+      throw new Error(`API fallback method failed: ${error.message}`);
     }
   }
 
@@ -423,23 +498,25 @@ class YouTubeProcessor {
   async downloadVideoWithImprovedFallbacks(videoUrl, processingId) {
     const methods = [];
     
-    // Add download methods based on available tools
     if (this.availableTools.ytDlp) {
-      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'standard'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'embedded'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'mobile'));
+      methods.push(() => this.downloadWithYtDlp(videoUrl, processingId, 'fallback'));
     }
     
     if (this.availableTools.youtubeDl) {
       methods.push(() => this.downloadWithYoutubeDl(videoUrl, processingId));
     }
     
-    // Always add ytdl-core as fallback
-    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId));
+    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'default'));
+    methods.push(() => this.downloadWithYtdlCore(videoUrl, processingId, 'fallback'));
 
     let lastError;
     
     for (const [index, method] of methods.entries()) {
       try {
-        console.log(`[${processingId}] Trying download method ${index + 1}`);
+        console.log(`[${processingId}] Trying download method ${index + 1}/${methods.length}`);
         await this.enforceRateLimit();
         
         const result = await method();
@@ -450,22 +527,15 @@ class YouTubeProcessor {
         lastError = error;
         console.warn(`[${processingId}] Download method ${index + 1} failed: ${error.message}`);
         
-        // Clean up failed attempt
-        try {
-          const files = await fs.readdir(this.tempDir);
-          const tempFiles = files.filter(file => file.includes(processingId));
-          for (const file of tempFiles) {
-            await fs.unlink(path.join(this.tempDir, file)).catch(() => {});
-          }
-        } catch (cleanupError) {
-          // Ignore cleanup errors
-        }
+        await this.cleanupFailedDownload(processingId);
         
-        if (this.isBotDetectionError(error)) {
+        if (this.isBotDetectionError(error) || this.isRateLimitError(error)) {
           this.consecutiveFailures++;
-          await this.sleep(Math.min(45000, 10000 * Math.pow(2, this.consecutiveFailures)));
+          const backoffTime = Math.min(90000, 15000 * Math.pow(2, this.consecutiveFailures));
+          console.log(`[${processingId}] Bot detection/rate limit, backing off for ${backoffTime}ms`);
+          await this.sleep(backoffTime);
         } else if (index < methods.length - 1) {
-          await this.sleep(8000);
+          await this.sleep(5000 + Math.random() * 5000);
         }
       }
     }
@@ -473,37 +543,58 @@ class YouTubeProcessor {
     throw new Error(`All download methods failed. Last error: ${lastError.message}`);
   }
 
-  async downloadWithYtDlp(videoUrl, processingId) {
+  async downloadWithYtDlp(videoUrl, processingId, mode = 'standard') {
     const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
     const userAgent = this.getRandomUserAgent();
     
-    const commands = ['yt-dlp', 'python3 -m yt_dlp'];
-    
-    for (const cmd of commands) {
-      try {
-        return await this.executeDownloadCommand(cmd, videoUrl, outputTemplate, userAgent, processingId);
-      } catch (error) {
-        console.warn(`Download with ${cmd} failed:`, error.message);
-        continue;
-      }
-    }
-    
-    throw new Error('yt-dlp download failed');
-  }
-
-  async executeDownloadCommand(baseCmd, videoUrl, outputTemplate, userAgent, processingId) {
-    const options = [
+    let baseOptions = [
       '--output', outputTemplate,
       '--format', 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
       '--merge-output-format', 'mp4',
       '--no-warnings',
       '--user-agent', userAgent,
       '--referer', 'https://www.youtube.com/',
-      '--retries', '2',
-      '--limit-rate', '2M',
-      videoUrl
+      '--retries', '3',
+      '--fragment-retries', '3',
+      '--limit-rate', '1.5M',
+      '--throttled-rate', '100K'
     ];
 
+    switch (mode) {
+      case 'embedded':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_embedded');
+        break;
+      case 'mobile':
+        baseOptions.push('--extractor-args', 'youtube:player_client=android');
+        baseOptions.push('--format', 'best[height<=480]/best');
+        break;
+      case 'fallback':
+        baseOptions.push('--extractor-args', 'youtube:player_client=web_creator');
+        baseOptions.push('--format', 'worst[ext=mp4]/worst');
+        break;
+      case 'standard':
+      default:
+        baseOptions.push('--extractor-args', 'youtube:player_client=web');
+        break;
+    }
+
+    baseOptions.push(videoUrl);
+    
+    const commands = ['yt-dlp', 'python3 -m yt_dlp'];
+    
+    for (const cmd of commands) {
+      try {
+        return await this.executeDownloadCommand(cmd, baseOptions, processingId, mode);
+      } catch (error) {
+        console.warn(`Download with ${cmd} (${mode}) failed:`, error.message);
+        continue;
+      }
+    }
+    
+    throw new Error(`yt-dlp download (${mode}) failed`);
+  }
+
+  async executeDownloadCommand(baseCmd, options, processingId, mode) {
     const fullCommand = baseCmd === 'yt-dlp' ? [baseCmd, ...options] : 
                        ['python3', '-m', 'yt_dlp', ...options];
 
@@ -514,8 +605,8 @@ class YouTubeProcessor {
       process.stderr.on('data', (data) => {
         stderr += data.toString();
         const progress = data.toString();
-        if (progress.includes('%')) {
-          console.log(`[${processingId}] Download progress: ${progress.trim()}`);
+        if (progress.includes('%') && !progress.includes('ERROR')) {
+          console.log(`[${processingId}] Download (${mode}): ${progress.trim()}`);
         }
       });
 
@@ -531,7 +622,7 @@ class YouTubeProcessor {
             }
             
             const filePath = path.join(this.tempDir, outputFile);
-            console.log(`[${processingId}] Download completed: ${outputFile}`);
+            console.log(`[${processingId}] Download completed (${mode}): ${outputFile}`);
             resolve(filePath);
           } catch (error) {
             reject(new Error(`Failed to locate downloaded file: ${error.message}`));
@@ -543,9 +634,9 @@ class YouTubeProcessor {
       });
 
       setTimeout(() => {
-        process.kill();
+        process.kill('SIGKILL');
         reject(new Error('Download timeout'));
-      }, 600000);
+      }, 900000);
     });
   }
 
@@ -572,19 +663,36 @@ class YouTubeProcessor {
     }
   }
 
-  async downloadWithYtdlCore(videoUrl, processingId) {
+  async downloadWithYtdlCore(videoUrl, processingId, mode = 'default') {
     const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
     
     return new Promise((resolve, reject) => {
       try {
-        const stream = ytdl(videoUrl, {
-          quality: 'highest',
-          filter: 'audioandvideo'
-        });
+        const options = {
+          quality: mode === 'fallback' ? 'lowest' : 'highest',
+          filter: 'audioandvideo',
+          requestOptions: {
+            headers: {
+              'User-Agent': this.getRandomUserAgent(),
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Referer': 'https://www.youtube.com/',
+            }
+          }
+        };
 
+        if (mode === 'fallback') {
+          options.quality = 'lowestvideo';
+        }
+
+        const stream = ytdl(videoUrl, options);
         const writeStream = fsSync.createWriteStream(outputPath);
         
         stream.pipe(writeStream);
+        
+        stream.on('progress', (chunkLength, downloaded, total) => {
+          const percent = (downloaded / total * 100).toFixed(1);
+          console.log(`[${processingId}] ytdl-core (${mode}) download: ${percent}%`);
+        });
         
         stream.on('error', reject);
         writeStream.on('error', reject);
@@ -596,6 +704,18 @@ class YouTubeProcessor {
     });
   }
 
+  async cleanupFailedDownload(processingId) {
+    try {
+      const files = await fs.readdir(this.tempDir);
+      const tempFiles = files.filter(file => file.includes(processingId));
+      for (const file of tempFiles) {
+        await fs.unlink(path.join(this.tempDir, file)).catch(() => {});
+      }
+    } catch (error) {
+      // Ignore cleanup errors
+    }
+  }
+
   isBotDetectionError(error) {
     const errorMsg = error.message.toLowerCase();
     return errorMsg.includes('sign in to confirm') || 
@@ -604,7 +724,18 @@ class YouTubeProcessor {
            errorMsg.includes('captcha') ||
            errorMsg.includes('blocked') ||
            errorMsg.includes('403') ||
-           errorMsg.includes('429');
+           errorMsg.includes('429') ||
+           errorMsg.includes('too many requests') ||
+           errorMsg.includes('quota exceeded');
+  }
+
+  isRateLimitError(error) {
+    const errorMsg = error.message.toLowerCase();
+    return errorMsg.includes('410') ||
+           errorMsg.includes('429') ||
+           errorMsg.includes('rate limit') ||
+           errorMsg.includes('too many requests') ||
+           errorMsg.includes('quota');
   }
 
   async validateDownloadedFile(filePath, processingId) {
@@ -643,7 +774,7 @@ class YouTubeProcessor {
       console.log(`[${processingId}] Downloaded file validation passed - Size: ${Math.round(stats.size / 1024 / 1024)}MB`);
       
     } catch (error) {
-      console.error(`[${processing_id}] File validation failed:`, error);
+      console.error(`[${processingId}] File validation failed:`, error);
       throw new Error(`Downloaded file validation failed: ${error.message}`);
     }
   }
@@ -857,7 +988,6 @@ class YouTubeProcessor {
         
         if (videoError) throw videoError;
         
-        // Upload thumbnail if available
         let thumbnailUrl = null;
         let thumbnailStoragePath = null;
         
@@ -887,7 +1017,6 @@ class YouTubeProcessor {
           }
         }
         
-        // Get public URL for video
         const { data: { publicUrl: videoUrl } } = supabase.storage
           .from('processed-shorts')
           .getPublicUrl(videoKey);
@@ -912,7 +1041,6 @@ class YouTubeProcessor {
         
       } catch (error) {
         console.error(`Failed to upload ${short.short_id}:`, error);
-        // Continue with other shorts even if one fails
       }
     }
     
@@ -925,7 +1053,6 @@ class YouTubeProcessor {
 
   async saveToDatabase(supabase, data) {
     try {
-      // Save main processing record
       const { error: processError } = await supabase
         .from('video_processing')
         .upsert({
@@ -951,7 +1078,6 @@ class YouTubeProcessor {
         console.error('Failed to save processing record:', processError);
       }
 
-      // Save individual shorts records
       for (const short of data.shorts) {
         const { error: shortError } = await supabase
           .from('short_videos')
@@ -978,7 +1104,6 @@ class YouTubeProcessor {
 
     } catch (error) {
       console.error('Database save error:', error);
-      // Don't throw error here as the processing was successful
     }
   }
 
@@ -1049,4 +1174,5 @@ class YouTubeProcessor {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
+
 module.exports = YouTubeProcessor;
