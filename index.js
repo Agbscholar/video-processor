@@ -57,7 +57,7 @@ try {
 const app = express();
 
 // FIX: Trust proxy for Render.com deployment
-app.set('trust proxy', true);
+app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
 
 const PORT = process.env.PORT || 10000;
 
@@ -217,8 +217,8 @@ app.get('/health', async (req, res) => {
         plan: 'free-tier-optimized'
       },
       config: {
-        supabase_url: process.env.SUPABASE_URL ? 'configured' : 'missing',
-        supabase_key: process.env.SUPABASE_SERVICE_KEY ? 'configured' : 'missing'
+        supabase_url: 'https://qwqvdvhvcroggxndniom.supabase.co' ? 'configured' : 'missing',
+        supabase_key: process.env.'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF3cXZkdmh2Y3JvZ2d4bmRuaW9tIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjQxMTc1MCwiZXhwIjoyMDcxOTg3NzUwfQ.8PLytgLvYwaHjOJzw2Hq2yOkGJmxEX8im6wM5HQxlF4' ? 'configured' : 'missing'
       }
     });
   } catch (error) {
