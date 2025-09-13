@@ -1,4 +1,4 @@
-// processors/youtube-processor-improved.js - 2025 Anti-Detection Optimized
+// processors/youtube-processor-enhanced.js - Complete 2025 Advanced Anti-Detection
 const ytdl = require('ytdl-core');
 const youtubedl = require('youtube-dl-exec');
 const ffmpeg = require('fluent-ffmpeg');
@@ -10,26 +10,49 @@ const { spawn, exec } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const https = require('https');
+const crypto = require('crypto');
 
 class YouTubeProcessor {
   constructor() {
     this.tempDir = '/tmp/processing';
     this.outputDir = '/tmp/output';
-    this.maxRetries = 3; // Reduced from 5
+    this.maxRetries = 2;
     
-    // Updated 2025 browser profiles - more conservative approach
-    this.stableBrowserProfile = {
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      acceptLanguage: 'en-US,en;q=0.9',
-      platform: 'Win32'
-    };
+    // Rotating browser profiles for better evasion
+    this.browserProfiles = [
+      {
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        acceptLanguage: 'en-US,en;q=0.9',
+        platform: 'Win32',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+      },
+      {
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        acceptLanguage: 'en-US,en;q=0.9',
+        platform: 'MacIntel',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+      },
+      {
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        acceptLanguage: 'en-US,en;q=0.9',
+        platform: 'Linux x86_64',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+      }
+    ];
     
-    // Simplified rate limiting - less suspicious
+    this.currentProfileIndex = 0;
     this.lastRequestTime = 0;
-    this.minRequestInterval = 8000; // Reduced to 8 seconds
+    this.minRequestInterval = parseInt(process.env.YOUTUBE_MIN_DELAY) || 45000;
     this.consecutiveFailures = 0;
+    this.sessionId = crypto.randomBytes(16).toString('hex');
     
     this.initializeTools();
+  }
+
+  getCurrentProfile() {
+    const profile = this.browserProfiles[this.currentProfileIndex];
+    this.currentProfileIndex = (this.currentProfileIndex + 1) % this.browserProfiles.length;
+    return profile;
   }
 
   async initializeTools() {
@@ -40,18 +63,40 @@ class YouTubeProcessor {
     };
     
     console.log('Available YouTube tools:', this.availableTools);
+    
+    // Ensure yt-dlp is updated
+    if (this.availableTools.ytDlp) {
+      try {
+        await this.updateYtDlp();
+      } catch (error) {
+        console.warn('Failed to update yt-dlp:', error.message);
+      }
+    }
   }
 
   async checkYtDlp() {
     return new Promise((resolve) => {
-      exec('yt-dlp --version', (error, stdout) => {
-        if (!error && stdout) {
-          console.log('yt-dlp version:', stdout.trim());
-          resolve(true);
-        } else {
+      // Try multiple possible yt-dlp commands
+      const commands = ['yt-dlp', 'python3 -m yt_dlp', '/usr/local/bin/yt-dlp'];
+      
+      const tryCommand = async (cmd, index = 0) => {
+        if (index >= commands.length) {
           resolve(false);
+          return;
         }
-      });
+        
+        exec(`${commands[index]} --version`, (error, stdout) => {
+          if (!error && stdout) {
+            console.log(`yt-dlp found via: ${commands[index]}, version:`, stdout.trim());
+            this.ytDlpCommand = commands[index];
+            resolve(true);
+          } else {
+            tryCommand(cmd, index + 1);
+          }
+        });
+      };
+      
+      tryCommand(commands[0]);
     });
   }
 
@@ -63,14 +108,36 @@ class YouTubeProcessor {
     });
   }
 
-  async enforceSimpleRateLimit() {
+  async updateYtDlp() {
+    return new Promise((resolve) => {
+      console.log('Updating yt-dlp to latest version...');
+      exec('python3 -m pip install --upgrade --force-reinstall yt-dlp', (error, stdout, stderr) => {
+        if (error) {
+          console.warn('yt-dlp update failed:', stderr);
+        } else {
+          console.log('yt-dlp updated successfully');
+        }
+        resolve();
+      });
+    });
+  }
+
+  async enforceAdvancedRateLimit() {
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
     
-    // Simple consistent delay - less suspicious than variable delays
-    if (timeSinceLastRequest < this.minRequestInterval) {
-      const sleepTime = this.minRequestInterval - timeSinceLastRequest;
-      console.log(`Rate limit: waiting ${Math.round(sleepTime/1000)}s`);
+    // Add exponential backoff on consecutive failures
+    const baseInterval = this.minRequestInterval;
+    const backoffMultiplier = Math.min(Math.pow(2, this.consecutiveFailures), 8);
+    const adjustedInterval = baseInterval * backoffMultiplier;
+    
+    // Add random jitter to avoid predictable patterns
+    const jitter = Math.random() * 10000; // 0-10 seconds
+    const totalDelay = adjustedInterval + jitter;
+    
+    if (timeSinceLastRequest < totalDelay) {
+      const sleepTime = totalDelay - timeSinceLastRequest;
+      console.log(`Advanced rate limit: waiting ${Math.round(sleepTime/1000)}s (backoff: ${backoffMultiplier.toFixed(1)}x)`);
       await this.sleep(sleepTime);
     }
     
@@ -87,7 +154,7 @@ class YouTubeProcessor {
       user_limits = { max_shorts: 3 }
     } = data;
     
-    console.log(`[${processing_id}] Starting improved YouTube processing`);
+    console.log(`[${processing_id}] Starting enhanced YouTube processing with advanced anti-detection`);
     
     if (!supabase_config?.url || !supabase_config?.service_key) {
       throw new Error('Missing Supabase configuration (url or service_key)');
@@ -107,11 +174,11 @@ class YouTubeProcessor {
         throw new Error('Invalid YouTube URL format');
       }
       
-      console.log(`[${processing_id}] Fetching video information`);
-      const videoDetails = await this.getVideoInfoImproved(video_url, processing_id);
+      console.log(`[${processing_id}] Fetching video information with multiple strategies`);
+      const videoDetails = await this.getVideoInfoAdvanced(video_url, processing_id);
       
-      console.log(`[${processing_id}] Downloading video with improved method`);
-      originalVideoPath = await this.downloadVideoImproved(video_url, processing_id);
+      console.log(`[${processing_id}] Downloading video with advanced anti-detection`);
+      originalVideoPath = await this.downloadVideoAdvanced(video_url, processing_id);
       
       await this.validateDownloadedFile(originalVideoPath, processing_id);
       
@@ -205,14 +272,12 @@ class YouTubeProcessor {
     return null;
   }
 
-  async getVideoInfoImproved(videoUrl, processingId) {
-    // Try methods in order of least to most detectable
+  async getVideoInfoAdvanced(videoUrl, processingId) {
     const methods = [
+      () => this.getVideoInfoViaInvidious(videoUrl, processingId),
       () => this.getVideoInfoViaOEmbed(videoUrl, processingId),
-      () => this.getVideoInfoWithYtdlCoreSimple(videoUrl, processingId),
-      ...(this.availableTools.ytDlp ? [
-        () => this.getVideoInfoWithYtDlpSimple(videoUrl, processingId)
-      ] : []),
+      () => this.getVideoInfoWithYtDlpAdvanced(videoUrl, processingId),
+      () => this.getVideoInfoWithYtdlCoreAdvanced(videoUrl, processingId),
       () => this.getVideoInfoFallback(videoUrl, processingId)
     ];
 
@@ -223,7 +288,7 @@ class YouTubeProcessor {
         console.log(`[${processingId}] Trying video info method ${index + 1}/${methods.length}`);
         
         if (index > 0) {
-          await this.enforceSimpleRateLimit();
+          await this.enforceAdvancedRateLimit();
         }
         
         const result = await method();
@@ -233,9 +298,8 @@ class YouTubeProcessor {
         lastError = error;
         console.warn(`[${processingId}] Video info method ${index + 1} failed: ${error.message}`);
         
-        // Only add delay between methods, not exponential backoff
         if (index < methods.length - 1) {
-          await this.sleep(2000);
+          await this.sleep(3000 + Math.random() * 2000); // 3-5 seconds
         }
       }
     }
@@ -243,18 +307,81 @@ class YouTubeProcessor {
     throw new Error(`All video info methods failed: ${lastError.message}`);
   }
 
-  async getVideoInfoWithYtDlpSimple(videoUrl, processingId) {
+  async getVideoInfoViaInvidious(videoUrl, processingId) {
+    const videoId = this.extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error('Cannot extract video ID for Invidious method');
+    }
+
+    // List of public Invidious instances (updated for 2025)
+    const invidiousInstances = [
+      'https://yewtu.be',
+      'https://invidious.kavin.rocks',
+      'https://inv.riverside.rocks',
+      'https://invidious.flokinet.to',
+      'https://invidious.privacydev.net'
+    ];
+
+    for (const instance of invidiousInstances) {
+      try {
+        const profile = this.getCurrentProfile();
+        const response = await axios.get(`${instance}/api/v1/videos/${videoId}`, {
+          timeout: 25000,
+          headers: {
+            'User-Agent': profile.userAgent,
+            'Accept': 'application/json',
+            'Accept-Language': profile.acceptLanguage,
+            'Cache-Control': 'no-cache'
+          }
+        });
+
+        const data = response.data;
+        
+        return {
+          title: data.title || 'Unknown Title',
+          description: (data.description || '').substring(0, 500),
+          author: data.author || 'Unknown',
+          duration: parseInt(data.lengthSeconds) || 0,
+          view_count: parseInt(data.viewCount) || 0,
+          upload_date: data.published || Date.now(),
+          video_id: videoId,
+          thumbnail: data.videoThumbnails?.[0]?.url || `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+          is_live: data.liveNow || false,
+          category: data.genre || 'Unknown'
+        };
+      } catch (error) {
+        console.warn(`Invidious instance ${instance} failed: ${error.message}`);
+        continue;
+      }
+    }
+    
+    throw new Error('All Invidious instances failed');
+  }
+
+  async getVideoInfoWithYtDlpAdvanced(videoUrl, processingId) {
+    if (!this.availableTools.ytDlp) {
+      throw new Error('yt-dlp not available');
+    }
+
+    const profile = this.getCurrentProfile();
+    const command = this.ytDlpCommand || 'yt-dlp';
+    
     const options = [
       '--dump-json',
       '--no-warnings',
       '--no-call-home',
-      '--socket-timeout', '30',
-      '--user-agent', this.stableBrowserProfile.userAgent,
+      '--socket-timeout', '60',
+      '--retries', '1',
+      '--user-agent', profile.userAgent,
+      '--add-header', `Accept-Language:${profile.acceptLanguage}`,
+      '--add-header', `Accept:${profile.accept}`,
+      '--extractor-args', 'youtube:player_client=android,web',
       videoUrl
     ];
     
     return new Promise((resolve, reject) => {
-      const process = spawn('yt-dlp', options);
+      const process = spawn(command.split(' ')[0], command.includes(' ') ? 
+        command.split(' ').slice(1).concat(options) : options);
       let stdout = '';
       let stderr = '';
 
@@ -294,18 +421,23 @@ class YouTubeProcessor {
       setTimeout(() => {
         process.kill('SIGKILL');
         reject(new Error('Video info request timeout'));
-      }, 45000);
+      }, 90000);
     });
   }
 
-  async getVideoInfoWithYtdlCoreSimple(videoUrl, processingId) {
+  async getVideoInfoWithYtdlCoreAdvanced(videoUrl, processingId) {
+    const profile = this.getCurrentProfile();
+    
     try {
       const options = {
         requestOptions: {
-          timeout: 30000,
+          timeout: 60000,
           headers: {
-            'User-Agent': this.stableBrowserProfile.userAgent,
-            'Accept-Language': this.stableBrowserProfile.acceptLanguage
+            'User-Agent': profile.userAgent,
+            'Accept-Language': profile.acceptLanguage,
+            'Accept': profile.accept,
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
           }
         }
       };
@@ -337,13 +469,15 @@ class YouTubeProcessor {
     }
 
     try {
+      const profile = this.getCurrentProfile();
       const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
       
       const response = await axios.get(oembedUrl, {
-        timeout: 15000,
+        timeout: 20000,
         headers: {
-          'User-Agent': this.stableBrowserProfile.userAgent,
-          'Accept': 'application/json'
+          'User-Agent': profile.userAgent,
+          'Accept': 'application/json',
+          'Accept-Language': profile.acceptLanguage
         }
       });
 
@@ -386,13 +520,11 @@ class YouTubeProcessor {
     };
   }
 
-  async downloadVideoImproved(videoUrl, processingId) {
-    // Simplified approach - try each method once with proper delays
+  async downloadVideoAdvanced(videoUrl, processingId) {
     const methods = [
-      () => this.downloadWithYtdlCoreStable(videoUrl, processingId),
-      ...(this.availableTools.ytDlp ? [
-        () => this.downloadWithYtDlpStable(videoUrl, processingId)
-      ] : [])
+      () => this.downloadWithYtDlpAdvanced(videoUrl, processingId),
+      () => this.downloadViaInvidiousProxy(videoUrl, processingId),
+      () => this.downloadWithYtdlCoreAdvanced(videoUrl, processingId)
     ];
 
     let lastError;
@@ -402,7 +534,7 @@ class YouTubeProcessor {
         console.log(`[${processingId}] Trying download method ${index + 1}/${methods.length}`);
         
         if (index > 0) {
-          await this.enforceSimpleRateLimit();
+          await this.enforceAdvancedRateLimit();
         }
         
         const result = await method();
@@ -414,9 +546,8 @@ class YouTubeProcessor {
         
         await this.cleanupFailedDownload(processingId);
         
-        // Simple delay between methods
         if (index < methods.length - 1) {
-          await this.sleep(10000); // 10 second delay
+          await this.sleep(20000 + Math.random() * 15000); // 20-35 second delay
         }
       }
     }
@@ -424,88 +555,44 @@ class YouTubeProcessor {
     throw new Error(`All download methods failed. Last error: ${lastError.message}`);
   }
 
-  async downloadWithYtdlCoreStable(videoUrl, processingId) {
-    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
-    
-    return new Promise((resolve, reject) => {
-      try {
-        const options = {
-          quality: 'highestvideo[height<=720]',
-          filter: 'audioandvideo',
-          requestOptions: {
-            timeout: 60000,
-            headers: {
-              'User-Agent': this.stableBrowserProfile.userAgent,
-              'Accept-Language': this.stableBrowserProfile.acceptLanguage
-            }
-          }
-        };
+  async downloadWithYtDlpAdvanced(videoUrl, processingId) {
+    if (!this.availableTools.ytDlp) {
+      throw new Error('yt-dlp not available');
+    }
 
-        const stream = ytdl(videoUrl, options);
-        const writeStream = fsSync.createWriteStream(outputPath);
-        
-        stream.pipe(writeStream);
-        
-        let lastProgress = 0;
-        stream.on('progress', (chunkLength, downloaded, total) => {
-          if (total > 0) {
-            const percent = (downloaded / total * 100);
-            if (percent - lastProgress > 20) {
-              console.log(`[${processingId}] Download progress: ${percent.toFixed(1)}%`);
-              lastProgress = percent;
-            }
-          }
-        });
-        
-        stream.on('error', (error) => {
-          writeStream.destroy();
-          reject(new Error(`Stream error: ${error.message}`));
-        });
-        
-        writeStream.on('error', (error) => {
-          reject(new Error(`Write error: ${error.message}`));
-        });
-        
-        writeStream.on('finish', () => {
-          console.log(`[${processingId}] Download completed: ${outputPath}`);
-          resolve(outputPath);
-        });
-        
-        setTimeout(() => {
-          stream.destroy();
-          writeStream.destroy();
-          reject(new Error('Download timeout'));
-        }, 600000); // 10 minutes timeout
-        
-      } catch (error) {
-        reject(new Error(`ytdl-core setup failed: ${error.message}`));
-      }
-    });
-  }
-
-  async downloadWithYtDlpStable(videoUrl, processingId) {
     const outputTemplate = path.join(this.tempDir, `${processingId}_original.%(ext)s`);
+    const profile = this.getCurrentProfile();
+    const command = this.ytDlpCommand || 'yt-dlp';
     
     const options = [
       '--output', outputTemplate,
-      '--format', 'best[height<=720][ext=mp4]/best[ext=mp4]',
+      '--format', 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
       '--merge-output-format', 'mp4',
       '--no-warnings',
-      '--socket-timeout', '45',
+      '--socket-timeout', '90',
       '--retries', '1',
-      '--user-agent', this.stableBrowserProfile.userAgent,
+      '--user-agent', profile.userAgent,
+      '--add-header', `Accept-Language:${profile.acceptLanguage}`,
+      '--add-header', `Accept:${profile.accept}`,
+      '--extractor-args', 'youtube:player_client=android,web',
+      '--throttled-rate', '2M',
       videoUrl
     ];
     
     return new Promise((resolve, reject) => {
-      const process = spawn('yt-dlp', options);
+      const process = spawn(command.split(' ')[0], command.includes(' ') ? 
+        command.split(' ').slice(1).concat(options) : options);
       let stderr = '';
+      let lastProgress = '';
       
       process.stderr.on('data', (data) => {
         stderr += data.toString();
         const progress = data.toString();
         if (progress.includes('%') && !progress.includes('ERROR')) {
-          console.log(`[${processingId}] yt-dlp: ${progress.trim()}`);
+          if (progress !== lastProgress) {
+            console.log(`[${processingId}] yt-dlp: ${progress.trim()}`);
+            lastProgress = progress;
+          }
         }
       });
 
@@ -535,8 +622,160 @@ class YouTubeProcessor {
       setTimeout(() => {
         process.kill('SIGKILL');
         reject(new Error('Download timeout'));
-      }, 600000); // 10 minutes timeout
+      }, 1200000); // 20 minutes timeout
     });
+  }
+
+  async downloadWithYtdlCoreAdvanced(videoUrl, processingId) {
+    const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+    const profile = this.getCurrentProfile();
+    
+    return new Promise((resolve, reject) => {
+      try {
+        const options = {
+          quality: 'highestvideo[height<=720]+bestaudio/best[height<=720]/best',
+          filter: (format) => format.container === 'mp4' && format.hasVideo && format.hasAudio,
+          requestOptions: {
+            timeout: 180000,
+            headers: {
+              'User-Agent': profile.userAgent,
+              'Accept-Language': profile.acceptLanguage,
+              'Accept': profile.accept,
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache',
+              'DNT': '1'
+            }
+          },
+          highWaterMark: 1024 * 1024 * 32 // 32MB buffer
+        };
+
+        const stream = ytdl(videoUrl, options);
+        const writeStream = fsSync.createWriteStream(outputPath);
+        
+        stream.pipe(writeStream);
+        
+        let lastProgress = 0;
+        stream.on('progress', (chunkLength, downloaded, total) => {
+          if (total > 0) {
+            const percent = Math.round(downloaded / total * 100);
+            if (percent - lastProgress >= 10) {
+              console.log(`[${processingId}] Download progress: ${percent}%`);
+              lastProgress = percent;
+            }
+          }
+        });
+        
+        stream.on('error', (error) => {
+          writeStream.destroy();
+          reject(new Error(`Stream error: ${error.message}`));
+        });
+        
+        writeStream.on('error', (error) => {
+          reject(new Error(`Write error: ${error.message}`));
+        });
+        
+        writeStream.on('finish', () => {
+          console.log(`[${processingId}] ytdl-core download completed: ${outputPath}`);
+          resolve(outputPath);
+        });
+        
+        setTimeout(() => {
+          stream.destroy();
+          writeStream.destroy();
+          reject(new Error('Download timeout'));
+        }, 1200000); // 20 minutes timeout
+        
+      } catch (error) {
+        reject(new Error(`ytdl-core setup failed: ${error.message}`));
+      }
+    });
+  }
+
+  async downloadViaInvidiousProxy(videoUrl, processingId) {
+    const videoId = this.extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error('Cannot extract video ID for Invidious proxy method');
+    }
+
+    const invidiousInstances = [
+      'https://yewtu.be',
+      'https://invidious.kavin.rocks',
+      'https://inv.riverside.rocks'
+    ];
+
+    for (const instance of invidiousInstances) {
+      try {
+        console.log(`[${processingId}] Trying Invidious proxy: ${instance}`);
+        
+        const profile = this.getCurrentProfile();
+        const response = await axios.get(`${instance}/api/v1/videos/${videoId}`, {
+          timeout: 30000,
+          headers: {
+            'User-Agent': profile.userAgent,
+            'Accept': 'application/json'
+          }
+        });
+
+        const videoData = response.data;
+        const formatStreams = videoData.formatStreams || [];
+        
+        // Find best quality video format
+        const bestFormat = formatStreams
+          .filter(f => f.container === 'mp4' && f.qualityLabel)
+          .sort((a, b) => {
+            const qualityA = parseInt(a.qualityLabel);
+            const qualityB = parseInt(b.qualityLabel);
+            return qualityB - qualityA;
+          })[0];
+
+        if (!bestFormat) {
+          throw new Error('No suitable video format found');
+        }
+
+        const outputPath = path.join(this.tempDir, `${processingId}_original.mp4`);
+        
+        return new Promise((resolve, reject) => {
+          const downloadStream = axios({
+            method: 'get',
+            url: bestFormat.url,
+            responseType: 'stream',
+            timeout: 900000, // 15 minutes
+            headers: {
+              'User-Agent': profile.userAgent,
+              'Range': 'bytes=0-'
+            }
+          });
+
+          downloadStream.then(response => {
+            const writeStream = fsSync.createWriteStream(outputPath);
+            response.data.pipe(writeStream);
+
+            response.data.on('error', (error) => {
+              writeStream.destroy();
+              reject(new Error(`Download stream error: ${error.message}`));
+            });
+
+            writeStream.on('error', (error) => {
+              reject(new Error(`Write error: ${error.message}`));
+            });
+
+            writeStream.on('finish', () => {
+              console.log(`[${processingId}] Invidious proxy download completed: ${outputPath}`);
+              resolve(outputPath);
+            });
+
+          }).catch(error => {
+            reject(new Error(`Invidious download request failed: ${error.message}`));
+          });
+        });
+
+      } catch (error) {
+        console.warn(`Invidious instance ${instance} failed: ${error.message}`);
+        continue;
+      }
+    }
+
+    throw new Error('All Invidious proxy attempts failed');
   }
 
   async cleanupFailedDownload(processingId) {
@@ -559,14 +798,31 @@ class YouTubeProcessor {
         throw new Error('Downloaded file is empty');
       }
       
-      if (stats.size < 1024) {
+      if (stats.size < 10240) { // Less than 10KB is suspicious
         const content = await fs.readFile(filePath, 'utf8');
         if (content.includes('<!DOCTYPE html>') || content.includes('<html>')) {
           throw new Error('Downloaded file is HTML (likely bot detection page)');
         }
       }
 
-      console.log(`[${processingId}] Downloaded file validation passed - Size: ${Math.round(stats.size / 1024 / 1024)}MB`);
+      // Check if it's a valid video file using ffprobe
+      return new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(filePath, (err, metadata) => {
+          if (err) {
+            reject(new Error(`Invalid video file: ${err.message}`));
+            return;
+          }
+          
+          const videoStream = metadata.streams.find(stream => stream.codec_type === 'video');
+          if (!videoStream) {
+            reject(new Error('No video stream found in downloaded file'));
+            return;
+          }
+          
+          console.log(`[${processingId}] File validation passed - Size: ${Math.round(stats.size / 1024 / 1024)}MB, Duration: ${metadata.format.duration}s`);
+          resolve();
+        });
+      });
       
     } catch (error) {
       console.error(`[${processingId}] File validation failed:`, error);
@@ -931,7 +1187,7 @@ class YouTubeProcessor {
     const message = error.message.toLowerCase();
     
     if (message.includes('410') || message.includes('bot') || message.includes('sign in to confirm')) {
-      return new Error('YouTube has detected automated access. Please try a different video or wait 30-60 minutes before trying again.');
+      return new Error('YouTube has detected automated access. This video may be restricted or requires different access methods. Try a different video or wait before retrying.');
     } else if (message.includes('video unavailable') || message.includes('private')) {
       return new Error('This YouTube video is private, unavailable, or has been deleted. Please verify the URL and try a different video.');
     } else if (message.includes('age-restricted')) {
@@ -951,7 +1207,7 @@ class YouTubeProcessor {
     } else if (message.includes('storage') || message.includes('upload')) {
       return new Error('Failed to save processed videos. Please try again.');
     } else {
-      return new Error(`Video processing failed: ${error.message}. Please try again or contact support.`);
+      return new Error(`Video processing failed: ${error.message}. The enhanced processor has tried multiple methods but was unable to access this video. Please try a different video or contact support.`);
     }
   }
 

@@ -1,15 +1,19 @@
-# render.yaml - Fixed deployment configuration with proper yt-dlp installation
+# render.yaml - Fixed deployment configuration for 2025 YouTube processing
 services:
   - type: web
     name: video-processing-service
     env: node
     plan: starter
     buildCommand: |
+      echo "Starting build process..."
+      
       # Update system packages
       apt-get update && apt-get install -y \
         python3 \
         python3-pip \
         python3-venv \
+        python3-dev \
+        build-essential \
         ffmpeg \
         curl \
         wget \
@@ -18,18 +22,39 @@ services:
         gnupg \
         lsb-release
       
-      # Install yt-dlp properly with all dependencies
-      python3 -m pip install --upgrade pip
-      python3 -m pip install --upgrade yt-dlp
+      echo "System packages installed successfully"
       
-      # Create symlink to ensure yt-dlp is in PATH
-      ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp || true
+      # Update pip to latest version
+      python3 -m pip install --upgrade pip setuptools wheel
       
-      # Verify installation
-      yt-dlp --version || python3 -m yt_dlp --version
+      # Install yt-dlp with all dependencies (critical for 2025)
+      echo "Installing yt-dlp..."
+      python3 -m pip install --upgrade --force-reinstall yt-dlp
+      
+      # Also install youtube-dl as fallback
+      python3 -m pip install --upgrade youtube-dl
+      
+      # Verify installations
+      echo "Verifying yt-dlp installation..."
+      python3 -m yt_dlp --version || {
+        echo "yt-dlp installation failed, trying alternative method..."
+        python3 -m pip install --upgrade --no-cache-dir yt-dlp
+        python3 -m yt_dlp --version
+      }
+      
+      # Create symlinks for easier access
+      ln -sf $(which python3) /usr/bin/python3 2>/dev/null || true
+      ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp 2>/dev/null || true
+      
+      # Set Python path
+      export PYTHONPATH="/usr/local/lib/python3.*/site-packages:$PYTHONPATH"
       
       # Install Node.js dependencies
+      echo "Installing Node.js dependencies..."
       npm ci --only=production
+      
+      # Verify ffmpeg installation
+      ffmpeg -version
       
       echo "Build completed successfully"
       
@@ -43,24 +68,52 @@ services:
       - key: MAX_FILE_SIZE
         value: "524288000"  # 500MB
       - key: MAX_PROCESSING_TIME
-        value: "600000"     # 10 minutes
+        value: "1200000"    # 20 minutes (increased for 2025 bot evasion)
+      
+      # Supabase Configuration (set these in Render dashboard)
       - key: SUPABASE_URL
-        sync: false  # Set in dashboard: https://qwqvdvhvcroggxndniom.supabase.co
+        sync: false  # Set to: https://qwqvdvhvcroggxndniom.supabase.co
       - key: SUPABASE_SERVICE_KEY
-        sync: false  # Set in dashboard: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        sync: false  # Set to your service key
+      
+      # Authentication tokens (set these in Render dashboard)
       - key: PROCESSING_SERVICE_TOKEN
-        sync: false  # Generate a secure token
+        sync: false  # Generate a secure random token
       - key: N8N_WEBHOOK_SECRET
         sync: false  # Your n8n webhook secret
+      - key: VIDEO_PROCESSOR_API_KEY
+        sync: false  # Additional API key if needed
+      
+      # Callback configuration
       - key: DEFAULT_CALLBACK_URL
         sync: false  # Your default callback URL
+      
+      # 2025 Anti-detection settings
+      - key: YOUTUBE_MIN_DELAY
+        value: "45000"     # Minimum 45s between requests
+      - key: YOUTUBE_MAX_RETRIES
+        value: "2"         # Max 2 retries per video
+      - key: YOUTUBE_BACKOFF_MULTIPLIER
+        value: "2"         # Conservative backoff
+      
+      # Python configuration
+      - key: PYTHONPATH
+        value: "/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages"
+      - key: PATH
+        value: "/usr/local/bin:/usr/bin:/bin"
     
     healthCheckPath: /health
     autoDeploy: true
     region: oregon
     
-    # Resource allocation for free tier
-    disk: 
+    # Resource allocation optimized for video processing
+    disk:
       name: video-temp
       mountPath: /tmp
-      sizeGB: 1
+      sizeGB: 3  # Increased for larger video files
+      
+    # Environment-specific settings
+    preDeployCommand: |
+      echo "Pre-deploy: Updating yt-dlp to latest version..."
+      python3 -m pip install --upgrade --force-reinstall yt-dlp || true
+      echo "Pre-deploy completed"
