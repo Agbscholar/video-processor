@@ -931,7 +931,7 @@ class YouTubeProcessor {
     const message = error.message.toLowerCase();
     
     if (message.includes('410') || message.includes('bot') || message.includes('sign in to confirm')) {
-      return new Error('YouTube has detected automated access. Please wait 30-60 minutes before trying again, or try a different video.');
+      return new Error('YouTube has detected automated access. Please try a different video or wait 30-60 minutes before trying again.');
     } else if (message.includes('video unavailable') || message.includes('private')) {
       return new Error('This YouTube video is private, unavailable, or has been deleted. Please verify the URL and try a different video.');
     } else if (message.includes('age-restricted')) {
@@ -941,15 +941,17 @@ class YouTubeProcessor {
     } else if (message.includes('timeout') || message.includes('network')) {
       return new Error('Network timeout occurred. Please try again in a few minutes.');
     } else if (message.includes('too large') || message.includes('file size')) {
-      return new Error('Video file is too large for processing. Please try a shorter or lower quality video.');
+      return new Error('Video file is too large for processing. Please try a shorter video.');
     } else if (message.includes('too long') || message.includes('duration')) {
       return new Error('Video is too long for processing. Please try a shorter video.');
     } else if (message.includes('ffmpeg') || message.includes('encoding')) {
       return new Error('Video encoding failed. The video format may not be supported.');
+    } else if (message.includes('download')) {
+      return new Error('Failed to download the video. Please check the URL and try again.');
     } else if (message.includes('storage') || message.includes('upload')) {
       return new Error('Failed to save processed videos. Please try again.');
     } else {
-      return new Error(`Video processing failed: ${error.message}. Please try again later.`);
+      return new Error(`Video processing failed: ${error.message}. Please try again or contact support.`);
     }
   }
 
