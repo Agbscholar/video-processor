@@ -122,7 +122,7 @@ class YouTubeProcessor {
       
       console.log(`[${processing_id}] Creating video shorts`);
       const shorts = await this.createShorts(originalVideoPath, {
-        processing_id,
+        processing_id: processing_id,
         subscription_type,
         user_limits,
         video_duration: metadata.duration,
@@ -136,7 +136,7 @@ class YouTubeProcessor {
       const uploadedShorts = await this.uploadToStorage(shortsWithThumbnails, supabase, processing_id);
       
       await this.saveToDatabase(supabase, {
-        processing_id,
+        processing_id: processing_id,
         video_info: { ...video_info, ...videoDetails },
         shorts: uploadedShorts,
         subscription_type,
@@ -399,18 +399,18 @@ class YouTubeProcessor {
     
     for (const [index, method] of methods.entries()) {
       try {
-        console.log(`[${processing_id}] Trying download method ${index + 1}/${methods.length}`);
+        console.log(`[${processingId}] Trying download method ${index + 1}/${methods.length}`);
         
         if (index > 0) {
           await this.enforceSimpleRateLimit();
         }
         
         const result = await method();
-        console.log(`[${processing_id}] Download method ${index + 1} succeeded`);
+        console.log(`[${processingId}] Download method ${index + 1} succeeded`);
         return result;
       } catch (error) {
         lastError = error;
-        console.warn(`[${processing_id}] Download method ${index + 1} failed: ${error.message}`);
+        console.warn(`[${processingId}] Download method ${index + 1} failed: ${error.message}`);
         
         await this.cleanupFailedDownload(processingId);
         
