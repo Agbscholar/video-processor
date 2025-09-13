@@ -1,13 +1,13 @@
-# render.yaml - Fixed deployment configuration for 2025 YouTube processing
+# render.yaml - Fixed deployment configuration with proper yt-dlp installation
 services:
   - type: web
     name: video-processing-service
     env: node
     plan: starter
     buildCommand: |
-      echo "Starting build process..."
+      echo "Starting enhanced build process..."
       
-      # Update system packages
+      # Update system and install dependencies
       apt-get update && apt-get install -y \
         python3 \
         python3-pip \
@@ -22,98 +22,82 @@ services:
         gnupg \
         lsb-release
       
-      echo "System packages installed successfully"
-      
-      # Update pip to latest version
+      # Ensure pip is updated
       python3 -m pip install --upgrade pip setuptools wheel
       
-      # Install yt-dlp with all dependencies (critical for 2025)
-      echo "Installing yt-dlp..."
-      python3 -m pip install --upgrade --force-reinstall yt-dlp
+      # Install yt-dlp with specific options for Render
+      echo "Installing yt-dlp with enhanced configuration..."
+      python3 -m pip install --upgrade --force-reinstall --no-cache-dir yt-dlp
       
-      # Also install youtube-dl as fallback
-      python3 -m pip install --upgrade youtube-dl
+      # Install youtube-dl as secondary fallback
+      python3 -m pip install --upgrade --no-cache-dir youtube-dl
+      
+      # Create proper symlinks
+      mkdir -p /opt/render/project/bin
+      ln -sf $(python3 -c "import site; print(site.USER_BASE)")/bin/yt-dlp /opt/render/project/bin/yt-dlp || \
+      ln -sf /usr/local/bin/yt-dlp /opt/render/project/bin/yt-dlp || \
+      echo "#!/bin/bash" > /opt/render/project/bin/yt-dlp && \
+      echo "python3 -m yt_dlp \$@" >> /opt/render/project/bin/yt-dlp && \
+      chmod +x /opt/render/project/bin/yt-dlp
       
       # Verify installations
-      echo "Verifying yt-dlp installation..."
-      python3 -m yt_dlp --version || {
-        echo "yt-dlp installation failed, trying alternative method..."
-        python3 -m pip install --upgrade --no-cache-dir yt-dlp
-        python3 -m yt_dlp --version
-      }
-      
-      # Create symlinks for easier access
-      ln -sf $(which python3) /usr/bin/python3 2>/dev/null || true
-      ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp 2>/dev/null || true
-      
-      # Set Python path
-      export PYTHONPATH="/usr/local/lib/python3.*/site-packages:$PYTHONPATH"
+      echo "Verifying installations..."
+      python3 -m yt_dlp --version
+      /opt/render/project/bin/yt-dlp --version || python3 -m yt_dlp --version
+      ffmpeg -version
       
       # Install Node.js dependencies
       echo "Installing Node.js dependencies..."
       npm ci --only=production
       
-      # Verify ffmpeg installation
-      ffmpeg -version
-      
       echo "Build completed successfully"
       
-    startCommand: "npm start"
+    startCommand: |
+      export PATH="/opt/render/project/bin:$PATH"
+      export PYTHONPATH="/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages:$PYTHONPATH"
+      npm start
     
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: "10000"
-      - key: MAX_FILE_SIZE
-        value: "524288000"  # 500MB
-      - key: MAX_PROCESSING_TIME
-        value: "1200000"    # 20 minutes (increased for 2025 bot evasion)
+      - key: PATH
+        value: "/opt/render/project/bin:/usr/local/bin:/usr/bin:/bin"
+      - key: PYTHONPATH
+        value: "/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages"
       
-      # Supabase Configuration (set these in Render dashboard)
+      # Enhanced anti-detection settings for 2025
+      - key: YOUTUBE_MIN_DELAY
+        value: "60000"     # Increased to 60 seconds
+      - key: YOUTUBE_MAX_RETRIES
+        value: "1"         # Reduced to 1 retry to avoid detection
+      - key: YOUTUBE_BACKOFF_MULTIPLIER
+        value: "3"         # More aggressive backoff
+      - key: YOUTUBE_REQUEST_TIMEOUT
+        value: "120000"    # 2 minute timeout
+      
+      # Supabase Configuration
       - key: SUPABASE_URL
-        sync: false  # Set to: https://qwqvdvhvcroggxndniom.supabase.co
+        sync: false
       - key: SUPABASE_SERVICE_KEY
-        sync: false  # Set to your service key
+        sync: false
       
-      # Authentication tokens (set these in Render dashboard)
+      # Authentication
       - key: PROCESSING_SERVICE_TOKEN
-        sync: false  # Generate a secure random token
+        sync: false
       - key: N8N_WEBHOOK_SECRET
-        sync: false  # Your n8n webhook secret
-      - key: VIDEO_PROCESSOR_API_KEY
-        sync: false  # Additional API key if needed
+        sync: false
       
       # Callback configuration
       - key: DEFAULT_CALLBACK_URL
-        sync: false  # Your default callback URL
-      
-      # 2025 Anti-detection settings
-      - key: YOUTUBE_MIN_DELAY
-        value: "45000"     # Minimum 45s between requests
-      - key: YOUTUBE_MAX_RETRIES
-        value: "2"         # Max 2 retries per video
-      - key: YOUTUBE_BACKOFF_MULTIPLIER
-        value: "2"         # Conservative backoff
-      
-      # Python configuration
-      - key: PYTHONPATH
-        value: "/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages"
-      - key: PATH
-        value: "/usr/local/bin:/usr/bin:/bin"
+        sync: false
     
     healthCheckPath: /health
     autoDeploy: true
     region: oregon
     
-    # Resource allocation optimized for video processing
     disk:
       name: video-temp
       mountPath: /tmp
-      sizeGB: 3  # Increased for larger video files
-      
-    # Environment-specific settings
-    preDeployCommand: |
-      echo "Pre-deploy: Updating yt-dlp to latest version..."
-      python3 -m pip install --upgrade --force-reinstall yt-dlp || true
-      echo "Pre-deploy completed"
+      sizeGB: 3
