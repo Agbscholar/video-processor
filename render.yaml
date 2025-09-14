@@ -5,8 +5,12 @@ services:
     env: docker
     plan: starter
     
-    # Docker will handle the build process
-    # No buildCommand needed - Dockerfile handles everything
+    # Explicitly specify Dockerfile location
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    
+    # No buildCommand or startCommand needed for Docker
+    # Docker will handle everything
     
     envVars:
       - key: NODE_ENV
@@ -16,13 +20,13 @@ services:
       
       # Enhanced anti-detection settings for 2025
       - key: YOUTUBE_MIN_DELAY
-        value: "60000"     # Increased to 60 seconds
+        value: "120000"    # Increased to 2 minutes
       - key: YOUTUBE_MAX_RETRIES
         value: "1"         # Reduced to 1 retry to avoid detection
       - key: YOUTUBE_BACKOFF_MULTIPLIER
-        value: "3"         # More aggressive backoff
+        value: "5"         # More aggressive backoff
       - key: YOUTUBE_REQUEST_TIMEOUT
-        value: "120000"    # 2 minute timeout
+        value: "180000"    # 3 minute timeout
       
       # Supabase Configuration
       - key: SUPABASE_URL
@@ -47,4 +51,4 @@ services:
     disk:
       name: video-temp
       mountPath: /tmp
-      sizeGB: 5  # Increased for Docker overhead
+      sizeGB: 5  
