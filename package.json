@@ -9,7 +9,7 @@
     "test": "jest",
     "lint": "eslint .",
     "cleanup": "node scripts/cleanup.js",
-    "postinstall": "echo 'Installation complete. Checking yt-dlp availability...' && python3 -m yt_dlp --version || echo 'yt-dlp not available via Python module'"
+    "postinstall": "echo 'Installation complete. Checking yt-dlp availability...' && echo 'PATH check:' && echo $PATH && echo 'Direct yt-dlp check:' && yt-dlp --version && echo 'Python module check:' && python3 -m yt_dlp --version && echo 'All yt-dlp checks passed!'"
   },
   "dependencies": {
     "express": "^4.18.2",
