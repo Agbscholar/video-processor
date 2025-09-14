@@ -1,7 +1,7 @@
 {
   "name": "video-processing-service",
-  "version": "2.0.0",
-  "description": "Enhanced video processing service for creating short videos from longer content with advanced YouTube anti-detection",
+  "version": "2.1.0",
+  "description": "Enhanced video processing service with YouTube Data API v3 integration for creating short videos from longer content with advanced anti-detection",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -28,7 +28,8 @@
     "dotenv": "^16.3.1",
     "node-fetch": "^3.3.2",
     "https": "^1.0.0",
-    "crypto": "^1.0.1"
+    "crypto": "^1.0.1",
+    "googleapis": "^134.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
@@ -44,6 +45,8 @@
     "processing",
     "shorts",
     "youtube",
+    "youtube-api",
+    "youtube-data-api-v3",
     "tiktok",
     "ffmpeg",
     "yt-dlp",

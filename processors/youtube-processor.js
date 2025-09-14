@@ -1,4 +1,4 @@
-// processors/youtube-processor-enhanced-2025.js - Complete Anti-Detection for 2025
+// processors/youtube-processor-enhanced-2025.js - With YouTube Data API v3 Integration
 const ytdl = require('ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const { createClient } = require('@supabase/supabase-js');
@@ -15,6 +15,16 @@ class YouTubeProcessor {
     this.tempDir = '/tmp/processing';
     this.outputDir = '/tmp/output';
     this.maxRetries = 1;
+    
+    // YouTube Data API v3 configuration
+    this.youtubeApiKey = process.env.YOUTUBE_API_KEY;
+    this.youtubeApiBaseUrl = 'https://www.googleapis.com/youtube/v3';
+    
+    if (!this.youtubeApiKey) {
+      console.warn('YouTube API key not found. Some features may be limited.');
+    } else {
+      console.log('YouTube Data API v3 initialized successfully');
+    }
     
     // Realistic browser profiles for 2025
     this.browserProfiles = [
@@ -68,7 +78,8 @@ class YouTubeProcessor {
   async initializeTools() {
     this.availableTools = {
       ytDlp: await this.checkYtDlpAdvanced(),
-      ytdlCore: true
+      ytdlCore: true,
+      youtubeApi: !!this.youtubeApiKey
     };
     
     console.log('Available YouTube tools:', this.availableTools);
@@ -143,6 +154,176 @@ class YouTubeProcessor {
     this.lastRequestTime = Date.now();
   }
 
+  // NEW: YouTube Data API v3 Integration
+  async getVideoInfoFromYouTubeAPI(videoUrl, processingId) {
+    if (!this.youtubeApiKey) {
+      throw new Error('YouTube API key not configured');
+    }
+
+    const videoId = this.extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error('Cannot extract video ID from URL');
+    }
+
+    console.log(`[${processingId}] Fetching video info via YouTube Data API v3`);
+
+    try {
+      const response = await axios.get(`${this.youtubeApiBaseUrl}/videos`, {
+        params: {
+          part: 'snippet,contentDetails,statistics,status',
+          id: videoId,
+          key: this.youtubeApiKey
+        },
+        timeout: 30000,
+        headers: {
+          'User-Agent': this.getCurrentProfile().userAgent,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.data.items || response.data.items.length === 0) {
+        throw new Error('Video not found or is private/deleted');
+      }
+
+      const video = response.data.items[0];
+      const snippet = video.snippet;
+      const contentDetails = video.contentDetails;
+      const statistics = video.statistics;
+      const status = video.status;
+
+      // Check if video is available
+      if (status.privacyStatus === 'private') {
+        throw new Error('Video is private');
+      }
+      
+      if (status.uploadStatus !== 'processed') {
+        throw new Error('Video is still processing on YouTube');
+      }
+
+      // Parse duration from ISO 8601 format (PT15M33S)
+      const duration = this.parseISO8601Duration(contentDetails.duration);
+      
+      // Check for content restrictions
+      const restrictions = [];
+      if (contentDetails.contentRating?.ytRating === 'ytAgeRestricted') {
+        restrictions.push('age_restricted');
+      }
+      if (contentDetails.regionRestriction?.blocked?.length > 0) {
+        restrictions.push('region_blocked');
+      }
+      if (snippet.liveBroadcastContent !== 'none') {
+        restrictions.push('live_content');
+      }
+
+      const videoInfo = {
+        video_id: videoId,
+        title: snippet.title || 'Unknown Title',
+        description: (snippet.description || '').substring(0, 1000),
+        author: snippet.channelTitle || 'Unknown Channel',
+        channel_id: snippet.channelId,
+        duration: duration,
+        view_count: parseInt(statistics.viewCount) || 0,
+        like_count: parseInt(statistics.likeCount) || 0,
+        comment_count: parseInt(statistics.commentCount) || 0,
+        upload_date: snippet.publishedAt?.substring(0, 10).replace(/-/g, '') || new Date().toISOString().substring(0, 10).replace(/-/g, ''),
+        thumbnail: snippet.thumbnails?.maxres?.url || snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url,
+        category_id: snippet.categoryId,
+        is_live: snippet.liveBroadcastContent !== 'none',
+        privacy_status: status.privacyStatus,
+        embeddable: status.embeddable,
+        public_stats_viewable: status.publicStatsViewable,
+        restrictions: restrictions,
+        tags: snippet.tags || [],
+        default_language: snippet.defaultLanguage,
+        api_source: 'youtube_data_api_v3'
+      };
+
+      // Additional validation based on API data
+      if (restrictions.includes('age_restricted')) {
+        throw new Error('Video is age-restricted and cannot be processed');
+      }
+
+      if (restrictions.includes('live_content')) {
+        throw new Error('Live streams are not supported');
+      }
+
+      if (!status.embeddable) {
+        console.warn(`[${processingId}] Video is not embeddable, may have download restrictions`);
+      }
+
+      console.log(`[${processingId}] YouTube API info retrieved: ${videoInfo.title} (${duration}s)`);
+      return videoInfo;
+
+    } catch (error) {
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.error?.message || error.message;
+        
+        if (status === 403) {
+          throw new Error(`YouTube API quota exceeded or access forbidden: ${message}`);
+        } else if (status === 404) {
+          throw new Error('Video not found or is private/deleted');
+        } else if (status === 400) {
+          throw new Error(`Invalid request to YouTube API: ${message}`);
+        } else {
+          throw new Error(`YouTube API error (${status}): ${message}`);
+        }
+      } else {
+        throw new Error(`YouTube API request failed: ${error.message}`);
+      }
+    }
+  }
+
+  // NEW: Parse ISO 8601 duration format
+  parseISO8601Duration(duration) {
+    const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!match) return 0;
+    
+    const hours = parseInt(match[1]) || 0;
+    const minutes = parseInt(match[2]) || 0;
+    const seconds = parseInt(match[3]) || 0;
+    
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  // NEW: Get channel information
+  async getChannelInfo(channelId, processingId) {
+    if (!this.youtubeApiKey || !channelId) {
+      return null;
+    }
+
+    try {
+      const response = await axios.get(`${this.youtubeApiBaseUrl}/channels`, {
+        params: {
+          part: 'snippet,statistics,brandingSettings',
+          id: channelId,
+          key: this.youtubeApiKey
+        },
+        timeout: 20000
+      });
+
+      if (!response.data.items || response.data.items.length === 0) {
+        return null;
+      }
+
+      const channel = response.data.items[0];
+      return {
+        channel_id: channelId,
+        channel_title: channel.snippet.title,
+        channel_description: (channel.snippet.description || '').substring(0, 500),
+        subscriber_count: parseInt(channel.statistics.subscriberCount) || 0,
+        video_count: parseInt(channel.statistics.videoCount) || 0,
+        view_count: parseInt(channel.statistics.viewCount) || 0,
+        country: channel.snippet.country,
+        custom_url: channel.snippet.customUrl,
+        thumbnail: channel.snippet.thumbnails?.high?.url
+      };
+    } catch (error) {
+      console.warn(`[${processingId}] Failed to get channel info:`, error.message);
+      return null;
+    }
+  }
+
   async process(data) {
     const { 
       processing_id, 
@@ -153,7 +334,7 @@ class YouTubeProcessor {
       user_limits = { max_shorts: 3 }
     } = data;
     
-    console.log(`[${processing_id}] Starting enhanced YouTube processing (2025)`);
+    console.log(`[${processing_id}] Starting enhanced YouTube processing with API integration (2025)`);
     
     if (!supabase_config?.url || !supabase_config?.service_key) {
       throw new Error('Missing Supabase configuration');
@@ -172,8 +353,14 @@ class YouTubeProcessor {
         throw new Error('Invalid YouTube URL format');
       }
       
-      console.log(`[${processing_id}] Getting video information`);
-      const videoDetails = await this.getVideoInfoSafe(video_url, processing_id);
+      console.log(`[${processing_id}] Getting video information with API integration`);
+      const videoDetails = await this.getVideoInfoSafeWithAPI(video_url, processing_id);
+      
+      // Get additional channel info if available
+      let channelInfo = null;
+      if (videoDetails.channel_id && this.youtubeApiKey) {
+        channelInfo = await this.getChannelInfo(videoDetails.channel_id, processing_id);
+      }
       
       console.log(`[${processing_id}] Downloading video`);
       originalVideoPath = await this.downloadVideoSafe(video_url, processing_id);
@@ -203,6 +390,7 @@ class YouTubeProcessor {
       await this.saveToDatabase(supabase, {
         processing_id,
         video_info: { ...video_info, ...videoDetails },
+        channel_info: channelInfo,
         shorts: uploadedShorts,
         subscription_type,
         metadata
@@ -218,7 +406,11 @@ class YouTubeProcessor {
         processing_id,
         shorts_results: uploadedShorts,
         total_shorts: uploadedShorts.length,
-        video_info: { ...video_info, ...videoDetails },
+        video_info: { 
+          ...video_info, 
+          ...videoDetails,
+          channel_info: channelInfo
+        },
         platform: 'YouTube',
         subscription_type,
         processing_completed_at: new Date().toISOString(),
@@ -226,7 +418,8 @@ class YouTubeProcessor {
           original_duration: metadata.duration,
           original_size_mb: metadata.size_mb,
           processing_time_seconds: processingTime,
-          shorts_total_duration: uploadedShorts.reduce((sum, short) => sum + (short.duration || 60), 0)
+          shorts_total_duration: uploadedShorts.reduce((sum, short) => sum + (short.duration || 60), 0),
+          api_source: videoDetails.api_source || 'fallback'
         }
       };
       
@@ -267,8 +460,10 @@ class YouTubeProcessor {
     return null;
   }
 
-  async getVideoInfoSafe(videoUrl, processingId) {
+  // ENHANCED: Video info with API integration
+  async getVideoInfoSafeWithAPI(videoUrl, processingId) {
     const methods = [
+      () => this.getVideoInfoFromYouTubeAPI(videoUrl, processingId),
       () => this.getVideoInfoViaOEmbed(videoUrl, processingId),
       () => this.getVideoInfoWithYtdlCore(videoUrl, processingId),
       () => this.getVideoInfoFallback(videoUrl, processingId)
@@ -278,7 +473,7 @@ class YouTubeProcessor {
     
     for (const [index, method] of methods.entries()) {
       try {
-        console.log(`[${processingId}] Info method ${index + 1}/${methods.length}`);
+        console.log(`[${processingId}] Info method ${index + 1}/${methods.length} ${index === 0 ? '(YouTube API)' : ''}`);
         
         if (index > 0) {
           await this.sleep(5000); // 5 second delay between methods
@@ -290,6 +485,11 @@ class YouTubeProcessor {
       } catch (error) {
         lastError = error;
         console.warn(`[${processingId}] Info method ${index + 1} failed: ${error.message}`);
+        
+        // If YouTube API fails with quota/auth issues, skip to next method immediately
+        if (index === 0 && error.message.includes('quota')) {
+          console.log(`[${processingId}] YouTube API quota exceeded, falling back to other methods`);
+        }
       }
     }
     
@@ -333,7 +533,8 @@ class YouTubeProcessor {
       video_id: videoId,
       thumbnail: data.thumbnail_url,
       is_live: false,
-      category: 'Unknown'
+      category: 'Unknown',
+      api_source: 'oembed'
     };
   }
 
@@ -369,7 +570,8 @@ class YouTubeProcessor {
         video_id: details.videoId,
         thumbnail: details.thumbnails?.[0]?.url,
         is_live: details.isLiveContent || false,
-        category: details.category || 'Unknown'
+        category: details.category || 'Unknown',
+        api_source: 'ytdl_core'
       };
     } catch (error) {
       throw new Error(`ytdl-core failed: ${error.message}`);
@@ -392,7 +594,8 @@ class YouTubeProcessor {
       video_id: videoId,
       thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
       is_live: false,
-      category: 'Unknown'
+      category: 'Unknown',
+      api_source: 'fallback'
     };
   }
 
@@ -896,11 +1099,12 @@ class YouTubeProcessor {
     return uploadedShorts;
   }
 
+  // ENHANCED: Database save with API data
   async saveToDatabase(supabase, data) {
     try {
-      console.log(`[${data.processing_id}] Saving to database`);
+      console.log(`[${data.processing_id}] Saving to database with API data`);
       
-      // Save processing record
+      // Save processing record with enhanced data
       const { error: processError } = await supabase
         .from('video_processing')
         .upsert({
@@ -917,6 +1121,21 @@ class YouTubeProcessor {
             fps: data.metadata.fps,
             codec: data.metadata.codec
           },
+          // Enhanced with API data
+          youtube_data: {
+            video_id: data.video_info.video_id,
+            view_count: data.video_info.view_count,
+            like_count: data.video_info.like_count,
+            comment_count: data.video_info.comment_count,
+            category_id: data.video_info.category_id,
+            is_live: data.video_info.is_live,
+            privacy_status: data.video_info.privacy_status,
+            embeddable: data.video_info.embeddable,
+            restrictions: data.video_info.restrictions,
+            tags: data.video_info.tags,
+            api_source: data.video_info.api_source
+          },
+          channel_data: data.channel_info,
           shorts_count: data.shorts.length,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
@@ -925,7 +1144,7 @@ class YouTubeProcessor {
       if (processError) {
         console.error('Failed to save processing record:', processError);
       } else {
-        console.log(`[${data.processing_id}] Processing record saved`);
+        console.log(`[${data.processing_id}] Processing record saved with API data`);
       }
 
       // Save individual shorts
@@ -997,7 +1216,11 @@ class YouTubeProcessor {
   enhanceError(error, processingId, videoUrl) {
     const message = error.message.toLowerCase();
     
-    if (message.includes('410')) {
+    if (message.includes('youtube api')) {
+      return new Error(`YouTube API error: ${error.message}. Please check your API key and quota limits.`);
+    } else if (message.includes('quota exceeded')) {
+      return new Error('YouTube API quota exceeded. Please wait for quota reset or upgrade your quota limits.');
+    } else if (message.includes('410')) {
       return new Error('YouTube detected automated access. This video may be restricted or age-gated. Try a different video or wait 10+ minutes before retrying.');
     } else if (message.includes('429')) {
       return new Error('Rate limited by YouTube. Please wait 10-15 minutes before trying again.');
