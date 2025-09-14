@@ -1,71 +1,18 @@
-# render.yaml - Fixed deployment configuration with proper yt-dlp installation
+# render.yaml - Docker-based deployment configuration
 services:
   - type: web
     name: video-processing-service
-    env: node
+    env: docker
     plan: starter
-    buildCommand: |
-      echo "Starting enhanced build process..."
-      
-      # Update system and install dependencies
-      apt-get update && apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
-        python3-dev \
-        build-essential \
-        ffmpeg \
-        curl \
-        wget \
-        software-properties-common \
-        ca-certificates \
-        gnupg \
-        lsb-release
-      
-      # Ensure pip is updated
-      python3 -m pip install --upgrade pip setuptools wheel
-      
-      # Install yt-dlp with specific options for Render
-      echo "Installing yt-dlp with enhanced configuration..."
-      python3 -m pip install --upgrade --force-reinstall --no-cache-dir yt-dlp
-      
-      # Install youtube-dl as secondary fallback
-      python3 -m pip install --upgrade --no-cache-dir youtube-dl
-      
-      # Create proper symlinks
-      mkdir -p /opt/render/project/bin
-      ln -sf $(python3 -c "import site; print(site.USER_BASE)")/bin/yt-dlp /opt/render/project/bin/yt-dlp || \
-      ln -sf /usr/local/bin/yt-dlp /opt/render/project/bin/yt-dlp || \
-      echo "#!/bin/bash" > /opt/render/project/bin/yt-dlp && \
-      echo "python3 -m yt_dlp \$@" >> /opt/render/project/bin/yt-dlp && \
-      chmod +x /opt/render/project/bin/yt-dlp
-      
-      # Verify installations
-      echo "Verifying installations..."
-      python3 -m yt_dlp --version
-      /opt/render/project/bin/yt-dlp --version || python3 -m yt_dlp --version
-      ffmpeg -version
-      
-      # Install Node.js dependencies
-      echo "Installing Node.js dependencies..."
-      npm ci --only=production
-      
-      echo "Build completed successfully"
-      
-    startCommand: |
-      export PATH="/opt/render/project/bin:$PATH"
-      export PYTHONPATH="/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages:$PYTHONPATH"
-      npm start
+    
+    # Docker will handle the build process
+    # No buildCommand needed - Dockerfile handles everything
     
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: "10000"
-      - key: PATH
-        value: "/opt/render/project/bin:/usr/local/bin:/usr/bin:/bin"
-      - key: PYTHONPATH
-        value: "/usr/local/lib/python3.11/site-packages:/usr/local/lib/python3.10/site-packages"
       
       # Enhanced anti-detection settings for 2025
       - key: YOUTUBE_MIN_DELAY
@@ -100,4 +47,4 @@ services:
     disk:
       name: video-temp
       mountPath: /tmp
-      sizeGB: 3
+      sizeGB: 5  # Increased for Docker overhead

@@ -876,6 +876,30 @@ app.post('/cleanup', authenticateToken, async (req, res) => {
   }
 });
 
+
+// Add this route to your index.js file
+app.get('/', (req, res) => {
+  res.json({
+    service: 'Video Processing Service',
+    version: '2.0.0',
+    status: 'running',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/health',
+      process: '/process',
+      processVideo: '/process-video',
+      upload: '/upload-and-process',
+      cleanup: '/cleanup'
+    },
+    tools: {
+      ytDlp: true, // Will be available via Docker
+      ytdlCore: true,
+      ffmpeg: true
+    },
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
