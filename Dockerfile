@@ -4,7 +4,7 @@ FROM node:18-slim
 # Set environment variables
 ENV NODE_ENV=production
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/opt/render/project/bin:$PATH"
+ENV PATH="/opt/render/project/bin:/opt/venv/bin:$PATH"
 
 # Install system dependencies including Python and ffmpeg
 RUN apt-get update && apt-get install -y \
@@ -47,7 +47,6 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install Node.js dependencies
-# Use npm install if package-lock.json doesn't exist, otherwise use npm ci
 RUN if [ -f package-lock.json ]; then \
         npm ci --omit=dev && npm cache clean --force; \
     else \
@@ -58,22 +57,29 @@ RUN if [ -f package-lock.json ]; then \
 COPY . .
 
 # Create necessary directories with proper permissions
-RUN mkdir -p /tmp/uploads /tmp/processing /tmp/output && \
-    chmod 755 /tmp/uploads /tmp/processing /tmp/output
+RUN mkdir -p /tmp/uploads /tmp/processing /tmp/output /app/cookies && \
+    chmod 755 /tmp/uploads /tmp/processing /tmp/output /app/cookies
 
-# Create non-root user for security but ensure they can access yt-dlp
+# Create non-root user for security
 RUN useradd -m -u 1001 appuser && \
     chown -R appuser:appuser /app /tmp/uploads /tmp/processing /tmp/output
 
-# Ensure appuser can access the virtual environment
-RUN chown -R appuser:appuser /opt/venv
+# Ensure appuser can access the virtual environment and cookies
+RUN chown -R appuser:appuser /opt/venv /app/cookies
 RUN chmod +x /opt/venv/bin/yt-dlp
+
+# Copy cookie files if they exist (optional, you can also mount them as volumes)
+COPY --chown=appuser:appuser cookies/* /app/cookies/ 2>/dev/null || true
 
 # Switch to non-root user
 USER appuser
 
 # Ensure PATH includes venv for the appuser
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Set cookie environment variables
+ENV YOUTUBE_COOKIES_PATH=/app/cookies/youtube_cookies.txt
+ENV YOUTUBE_COOKIES_JSON_PATH=/app/cookies/youtube_cookies.json
 
 # Expose the port your app runs on
 EXPOSE 10000
