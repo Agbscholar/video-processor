@@ -5,11 +5,11 @@
 # Get them from browser dev tools or cookie export extensions
 
 # Format: domain	domain_specified	path	secure	expires	name	value
-.youtube.com	TRUE	/	FALSE	1735689600	VISITOR_INFO1_LIVE	your_visitor_info_here
-.youtube.com	TRUE	/	TRUE	1735689600	LOGIN_INFO	your_login_info_here  
-.youtube.com	TRUE	/	FALSE	1735689600	PREF	your_preferences_here
-.youtube.com	TRUE	/	FALSE	1735689600	SID	your_session_id_here
-.youtube.com	TRUE	/	FALSE	1735689600	HSID	your_hsid_here
-.youtube.com	TRUE	/	FALSE	1735689600	SSID	your_ssid_here
-.youtube.com	TRUE	/	FALSE	1735689600	APISID	your_apisid_here
-.youtube.com	TRUE	/	TRUE	1735689600	SAPISID	your_sapisid_here
+.youtube.com	TRUE	/	FALSE	1735689600	VISITOR_INFO1_LIVE	FI2nV4g_SZ8
+.youtube.com	TRUE	/	TRUE	1735689600	LOGIN_INFO	AFmmF2swRAIgLqynmY7rE_VqG1sighTcacVrqFA4sEABAo4L4V9ralwCIFrCiFO3lZb5elQRpTZ6YSz_lwoGqlA8fLRhPDD7WDSE:QUQ3MjNmemI2UmZjZV9adGowQ1RSeEFHWlpVOGZPV2pBLVFoby1uNm1kaGhaTnA5NklqUUxpeDVxRmF4RVBuTWdkMWFiSHk5Z0w2YU1fUUNuMGhKVlFBZ3hNa3BXQnBXX1BOUXdXeUVlamUyS2Z2Rm84anNPejNrZlFQQzRuVEdUTEtOVVJjNm5kMnEwaS0wODJ2ZFNWQllyMXdWR1B6LXZB
+.youtube.com	TRUE	/	FALSE	1735689600	PREF	f6=40000000&tz=Africa.Lagos&f5=30000&f7=100&f4=4000000
+.youtube.com	TRUE	/	FALSE	1735689600	SID	g.a0001Aj17KtHqdYMGZmfKQBqMtowUOXJXXIRZBYsSHwu1g6p4EStWDR8Q9POPxTTL9wlUtrx5QACgYKAX0SARISFQHGX2MiuI5LK8J61YUVWmS-rxo9mRoVAUF8yKrTsy8H7wQXSVEcnKAr12Qf0076
+.youtube.com	TRUE	/	FALSE	1735689600	HSID	AdABISqOn-Ej0eMIv
+.youtube.com	TRUE	/	FALSE	1735689600	SSID	AEn9Kno8ZrnoaqMdX
+.youtube.com	TRUE	/	FALSE	1735689600	APISID	U7L1NBx3on4jn_RA/A4E6Ovf1bqmwOxeLF
+.youtube.com	TRUE	/	TRUE	1735689600	SAPISID	Gux0R3-1ZaUw5fvP/AzK6FpiYYLtA1MixT

@@ -61,21 +61,7 @@ RUN mkdir -p /tmp/uploads /tmp/processing /tmp/output /app/cookies && \
     chmod 755 /tmp/uploads /tmp/processing /tmp/output /app/cookies
 
 # Create cookie template file
-RUN cat > /app/cookies/youtube_cookies_template.txt << 'EOF'
-# Netscape HTTP Cookie File
-# This is a template - replace with your actual YouTube cookies
-# 
-# Format: domain	domain_specified	path	secure	expiry	name	value
-#
-# .youtube.com	TRUE	/	FALSE	1735689600	VISITOR_INFO1_LIVE	your_visitor_info
-# .youtube.com	TRUE	/	TRUE	1735689600	LOGIN_INFO	your_login_info
-# .youtube.com	TRUE	/	FALSE	1735689600	PREF	your_preferences
-# .youtube.com	TRUE	/	FALSE	1735689600	SID	your_session_id
-# .youtube.com	TRUE	/	FALSE	1735689600	HSID	your_hsid
-# .youtube.com	TRUE	/	FALSE	1735689600	SSID	your_ssid
-# .youtube.com	TRUE	/	FALSE	1735689600	APISID	your_apisid
-# .youtube.com	TRUE	/	TRUE	1735689600	SAPISID	your_sapisid
-EOF
+COPY cookies/youtube_cookies.txt /app/cookies/youtube_cookies.txt
 
 # Create non-root user for security
 RUN useradd -m -u 1001 appuser && \
