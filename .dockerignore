@@ -1,46 +1,24 @@
-# Node modules (will be installed in Docker)
 node_modules
 npm-debug.log*
-
-# Git
 .git
 .gitignore
-
-# Environment files (these will be set via Render)
 .env
 .env.local
 .env.*.local
-
-# Logs
 logs
 *.log
-
-# Runtime data
 pids
 *.pid
 *.seed
-
-# Coverage directory used by tools like istanbul
 coverage
-
-# Dependency directories
 .npm
-
-# Optional npm cache directory
-.npm
-
-# Temporary folders
 tmp/
 temp/
-
-# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -48,11 +26,7 @@ temp/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Build outputs
 dist/
 build/
-
-# Documentation
 README.md
 *.md

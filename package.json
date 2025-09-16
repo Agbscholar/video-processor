@@ -1,7 +1,7 @@
 {
   "name": "video-processing-service",
-  "version": "2.1.0",
-  "description": "Enhanced video processing service with YouTube Data API v3 integration for creating short videos from longer content with advanced anti-detection",
+  "version": "2.2.0",
+  "description": "Video processing service for creating short videos from uploaded content",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -14,9 +14,6 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "@supabase/supabase-js": "^2.39.0",
-    "ytdl-core": "^4.11.5",
-    "@distube/ytdl-core": "^4.13.5",
-    "youtube-dl-exec": "^2.4.13",
     "fluent-ffmpeg": "^2.1.2",
     "axios": "^1.6.0",
     "multer": "^1.4.5-lts.1",
@@ -26,10 +23,7 @@
     "morgan": "^1.10.0",
     "uuid": "^9.0.1",
     "dotenv": "^16.3.1",
-    "node-fetch": "^3.3.2",
-    "https": "^1.0.0",
-    "crypto": "^1.0.1",
-    "googleapis": "^134.0.0"
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
@@ -44,15 +38,8 @@
     "video",
     "processing",
     "shorts",
-    "youtube",
-    "youtube-api",
-    "youtube-data-api-v3",
-    "tiktok",
     "ffmpeg",
-    "yt-dlp",
-    "anti-detection",
-    "invidious",
-    "video-downloader"
+    "video-upload"
   ],
   "author": "Blessed Osezua",
   "license": "MIT",
